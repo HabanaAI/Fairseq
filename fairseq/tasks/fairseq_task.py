@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -527,8 +528,13 @@ class FairseqTask(object):
             loss, sample_size, logging_output = criterion(model, sample)
         return loss, sample_size, logging_output
 
-    def optimizer_step(self, optimizer, model, update_num):
-        optimizer.step()
+    def optimizer_step(self, optimizer, model, update_num, hmp=False):
+        if hmp:
+            from habana_frameworks.torch.hpex import hmp
+            with hmp.disable_casts():
+                optimizer.step()
+        else:
+            optimizer.step()
 
     def build_dataset_for_inference(
         self, src_tokens: List[torch.Tensor], src_lengths: List[int], **kwargs

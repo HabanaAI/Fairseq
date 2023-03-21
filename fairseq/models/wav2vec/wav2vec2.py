@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -20,6 +21,8 @@ from fairseq.models import BaseFairseqModel, register_model
 from fairseq.modules import (
     Fp32GroupNorm,
     Fp32LayerNorm,
+    Fp32InstanceNorm,
+    Fp32InstanceNorm2d,
     GradMultiply,
     GumbelVectorQuantizer,
     LayerNorm,
@@ -31,7 +34,7 @@ from fairseq.modules import (
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
 from fairseq.modules.conformer_layer import ConformerWav2Vec2EncoderLayer
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
-from fairseq.utils import buffered_arange, index_put, is_xla_tensor
+from fairseq.utils import buffered_arange, index_put, is_xla_tensor, is_hpu_tensor
 
 from .utils import pad_to_multiple
 
@@ -288,6 +291,10 @@ class Wav2Vec2Config(FairseqDataclass):
         metadata={"help": "Positional encoding type to use in conformer"},
     )
     fp16: bool = field(default=False, metadata={"help": "If fp16 is being used"})
+    hpu_graphs: bool = field(
+        default=False,
+        metadata={"help": "whether to enable hpu_graphs"},
+    )
 
 
 @register_model("wav2vec2", dataclass=Wav2Vec2Config)
@@ -496,17 +503,35 @@ class Wav2Vec2Model(BaseFairseqModel):
             assert high > 1, f"{bsz,tsz,fsz}"
 
             if self.n_negatives > 0:
-                tszs = (
-                    buffered_arange(num)
-                    .unsqueeze(-1)
-                    .expand(-1, self.n_negatives)
-                    .flatten()
-                )
+                if is_hpu_tensor(y):
+                    tszs = (
+                        torch.arange(num, device=y.device)
+                        .unsqueeze(-1)
+                        .expand(-1, self.n_negatives)
+                        .flatten()
+                    )
+                    if self.cfg.hpu_graphs and self.is_hpugraph_tracing():
+                        neg_idxs = torch.randint(
+                            low=0, high=high - 1, size=(bsz, self.n_negatives * num), dtype=torch.int32, device='hpu'
+                        ).to(dtype=torch.int16)
+                    else:
+                        neg_idxs = torch.randint(
+                            low=0, high=high - 1, size=(bsz, self.n_negatives * num), dtype=torch.int16
+                        ).to(y.device)
 
-                neg_idxs = torch.randint(
-                    low=0, high=high - 1, size=(bsz, self.n_negatives * num)
-                )
-                neg_idxs[neg_idxs >= tszs] += 1
+                    idxs = neg_idxs >= tszs
+                    neg_idxs = torch.mul(neg_idxs, ~idxs) + torch.mul(neg_idxs + 1, idxs)
+                else:
+                    tszs = (
+                        buffered_arange(num)
+                        .unsqueeze(-1)
+                        .expand(-1, self.n_negatives)
+                        .flatten()
+                    )
+                    neg_idxs = torch.randint(
+                        low=0, high=high - 1, size=(bsz, self.n_negatives * num)
+                    )
+                    neg_idxs[neg_idxs >= tszs] += 1
 
             if self.cross_sample_negatives > 0:
                 tszs = (
@@ -524,7 +549,7 @@ class Wav2Vec2Model(BaseFairseqModel):
                 cross_neg_idxs[cross_neg_idxs >= tszs] += 1
 
         if self.n_negatives > 0:
-            neg_idxs = neg_idxs + (torch.arange(bsz).unsqueeze(1) * high)
+            neg_idxs = neg_idxs + (torch.arange(bsz, device=y.device).unsqueeze(1) * high)
         else:
             neg_idxs = cross_neg_idxs
 
@@ -539,22 +564,33 @@ class Wav2Vec2Model(BaseFairseqModel):
         )  # to NxBxTxC
         return negs, neg_idxs
 
+    def cosine_similarity_without_broadcast(self, x1, x2, dim):
+        eps = 1e-08
+        w12 = torch.sum(x1 * x2, dim)
+        w1 = torch.sum(x1 * x1, dim)
+        w2 = torch.sum(x2 * x2, dim)
+        n12 = (w1 * w2).clamp_(eps * eps).sqrt_()
+        return w12.div_(n12)
+
     def compute_preds(self, x, y, negatives):
 
         neg_is_pos = (y == negatives).all(-1)
         y = y.unsqueeze(0)
         targets = torch.cat([y, negatives], dim=0)
 
-        logits = torch.cosine_similarity(x.float(), targets.float(), dim=-1)
-        logits = logits / self.logit_temp
-        logits = logits.type_as(x)
+        if is_hpu_tensor(x) and x.is_floating_point() and is_hpu_tensor(targets):
+            logits = self.cosine_similarity_without_broadcast(x, targets, dim=-1)
+        else:
+            logits = torch.cosine_similarity(x.float(), targets.float(), dim=-1).type_as(x)
 
-        if is_xla_tensor(logits) or neg_is_pos.any():
+        logits = logits / self.logit_temp
+
+        if is_xla_tensor(logits) or is_hpu_tensor(logits) or neg_is_pos.any():
+            fillval = -float(2 ** 30)
             if not hasattr(self, "_inftensor"):
-                fillval = -float(2**30)
                 self._inftensor = (
                     torch.tensor(fillval).to(x.device)
-                    if is_xla_tensor(logits)
+                    if is_xla_tensor(logits) or is_hpu_tensor(logits)
                     else float("-inf")
                 )
             logits[1:] = index_put(logits[1:], neg_is_pos, self._inftensor)
@@ -567,7 +603,7 @@ class Wav2Vec2Model(BaseFairseqModel):
         """
 
         def _conv_out_length(input_length, kernel_size, stride):
-            return torch.floor((input_length - kernel_size) / stride + 1)
+            return torch.floor((input_length - kernel_size) / float(stride) + 1)
 
         conv_cfg_list = eval(self.cfg.conv_feature_layers)
 
@@ -604,7 +640,8 @@ class Wav2Vec2Model(BaseFairseqModel):
         features = self.layer_norm(features)
         unmasked_features = features.clone()
 
-        if padding_mask is not None and padding_mask.any():
+        if (padding_mask is not None and
+            (utils.is_hpu_tensor(padding_mask) or padding_mask.any())):
             input_lengths = (1 - padding_mask.long()).sum(-1)
             # apply conv formula to get real output_lengths
             output_lengths = self._get_feat_extract_output_lengths(input_lengths)
@@ -621,7 +658,7 @@ class Wav2Vec2Model(BaseFairseqModel):
                     output_lengths - 1,
                 )
             ] = 1
-            padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+            padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).to(torch.float32).bool()
         else:
             padding_mask = None
 
@@ -659,7 +696,7 @@ class Wav2Vec2Model(BaseFairseqModel):
                 mask_indices=mask_indices,
                 mask_channel_indices=mask_channel_indices,
             )
-            if not is_xla_tensor(x) and mask_indices is not None:
+            if not (is_xla_tensor(x) or is_hpu_tensor(x)) and mask_indices is not None:
                 # tpu-comment: reducing the size in a dynamic way causes
                 # too many recompilations on xla.
                 y = unmasked_features[mask_indices].view(
@@ -741,7 +778,7 @@ class Wav2Vec2Model(BaseFairseqModel):
                     padding_count=padding_count,
                 )
 
-        if not is_xla_tensor(x):
+        if not (is_xla_tensor(x) or is_hpu_tensor(x)):
             # tpu-comment: reducing the size in a dynamic way causes
             # too many recompilations on xla.
             x = x[mask_indices].view(x.size(0), -1, x.size(-1))
@@ -823,6 +860,8 @@ class ConvFeatureExtractionModel(nn.Module):
         dropout: float = 0.0,
         mode: str = "default",
         conv_bias: bool = False,
+        use_conv1d: bool = False,
+        use_instancenorm: bool = True,
     ):
         super().__init__()
 
@@ -838,9 +877,22 @@ class ConvFeatureExtractionModel(nn.Module):
             conv_bias=False,
         ):
             def make_conv():
-                conv = nn.Conv1d(n_in, n_out, k, stride=stride, bias=conv_bias)
+                if use_conv1d:
+                    conv = nn.Conv1d(n_in, n_out, k, stride=stride, bias=conv_bias)
+                else:
+                    conv = nn.Conv2d(n_in, n_out, (1, k), stride=(1, stride), bias=conv_bias)
                 nn.init.kaiming_normal_(conv.weight)
                 return conv
+
+            def make_group_norm(num_groups, num_channels):
+                if use_instancenorm and num_groups == num_channels:
+                    if use_conv1d:
+                        norm = Fp32InstanceNorm(num_channels, affine=True)
+                    else:
+                        norm = Fp32InstanceNorm2d(num_channels, affine=True)
+                else:
+                    norm = Fp32GroupNorm(num_groups, num_channels, affine=True)
+                return norm
 
             assert (
                 is_layer_norm and is_group_norm
@@ -861,11 +913,13 @@ class ConvFeatureExtractionModel(nn.Module):
                 return nn.Sequential(
                     make_conv(),
                     nn.Dropout(p=dropout),
-                    Fp32GroupNorm(dim, dim, affine=True),
+                    make_group_norm(dim, dim),
                     nn.GELU(),
                 )
             else:
                 return nn.Sequential(make_conv(), nn.Dropout(p=dropout), nn.GELU())
+
+        self.use_conv1d = use_conv1d
 
         in_d = 1
         self.conv_layers = nn.ModuleList()
@@ -888,12 +942,18 @@ class ConvFeatureExtractionModel(nn.Module):
 
     def forward(self, x):
 
-        # BxT -> BxCxT
-        x = x.unsqueeze(1)
+        if self.use_conv1d:
+            # BxT -> BxCxT
+            x = x.unsqueeze(1)
+        else:
+            # BxT -> BxCx1xT
+            x = x.reshape(x.shape[0], 1, 1, -1)
 
         for conv in self.conv_layers:
             x = conv(x)
 
+        if not self.use_conv1d:
+            x = x.reshape(x.shape[0], x.shape[1], -1)
         return x
 
 

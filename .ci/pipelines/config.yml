@@ -1,0 +1,3 @@
+config:
+  gerritTriggerMap:
+  - repository: fairseq-fork

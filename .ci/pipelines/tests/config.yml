@@ -1,0 +1,14 @@
+testJobConfig:
+  pytorch_fairseq_topology:
+    envVars:
+      USE_WEKA_IN_CONTAINER: 'true'
+    devices:
+      gaudi:
+        hwType:
+          asic:
+      gaudi2:
+        hwType:
+          asic:
+      gaudi_hls:
+        hwType:
+          asic:

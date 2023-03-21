@@ -1,0 +1,39 @@
+common:
+  config:
+    testCommand: run_pytorch_qa_tests -t topology_ci
+    testXMLOutputKey: -x
+    loadLKD: true
+    releaseFlag: false
+  envVars:
+    CI_WORKSPACE: "${PWD}"
+    LD_LIBRARY_PATH: "${LD_LIBRARY_PATH}:${HOME}/.venv/lib"
+    LD_PRELOAD: "/lib/x86_64-linux-gnu/libtcmalloc.so.4"
+  preTestStages:
+    enable weka:
+      command: sudo systemctl start mnt-weka.mount
+      runOutsideDocker: true
+    Install Python test dependencies:
+      command: '__check_pytorch_dev_py_deps; __check_pytest_dev_py_deps'
+    Update PyTorch module:
+      command: |
+        pip install -U $PYTORCH_FORK_RELEASE_BUILD/pkgs/*.whl ${user_install}
+        pip install -U ${PYTORCH_VISION_FORK_BUILD}/pkgs/*.whl ${user_install}
+        install_pillow_simd
+        if [ $GERRIT_PROJECT == pytorch-lightning-fork ]
+        then
+          pip install -U $PYTORCH_LIGHTNING_FORK_BUILD/pkgs/*.whl ${user_install}
+        fi
+        pip install -U $PYTORCH_MODULES_RELEASE_BUILD/pkgs/*.whl ${user_install}
+testsMap:
+  Test_fairseq_fork_gaudi_asic_pytorch_fairseq_topology:
+    stages:
+      Run fairseq-fork smoke tests:
+        filter: -a smoke_fq
+  Test_fairseq_fork_gaudi2_asic_pytorch_fairseq_topology:
+    stages:
+      Run fairseq-fork smoke tests:
+        filter: -a smoke_fq
+  Test_fairseq_fork_gaudi_hls_asic_pytorch_fairseq_topology:
+    stages:
+      Run fairseq-fork smoke tests:
+        filter: -a smoke_fq

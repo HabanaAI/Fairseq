@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -94,12 +95,6 @@ extensions.extend(
                 "fairseq/clib/libnat/edit_dist.cpp",
             ],
         ),
-        cpp_extension.CppExtension(
-            "alignment_train_cpu_binding",
-            sources=[
-                "examples/operators/alignment_train_cpu.cpp",
-            ],
-        ),
     ]
 )
 if "CUDA_HOME" in os.environ:
@@ -187,7 +182,8 @@ def do_setup(package_data):
             "torch>=1.10",
             "tqdm",
             "bitarray",
-            "torchaudio>=0.8.0",
+            "tensorboardX==2.6",
+            "soundfile==0.12.1",
         ],
         extras_require={
             "dev": ["flake8", "pytest", "black==22.3.0"],

@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -145,6 +146,23 @@ class CommonConfig(FairseqDataclass):
     )
     cpu: bool = field(default=False, metadata={"help": "use CPU instead of CUDA"})
     tpu: bool = field(default=False, metadata={"help": "use TPU instead of CUDA"})
+    hpu: bool = field(default=False, metadata={"help": "use HPU for training the model"})
+    hpu_lazy_mode: bool = field(default=False, metadata={"help": "use HPU Lazy mode for training the model"})
+    hpu_graphs: bool = field(default=False, metadata={"help": "use HPU graphs for training the model"})
+    hpu_graphs_qa_mode: bool = field(default=False, metadata={"help": "use HPU graphs for perf test"})
+    hmp: bool = field(default=False, metadata={"help":" enable Habana mix precision"})
+    hmp_bf16: Optional[str]=field(
+        default="",
+        metadata = {
+            "help": "path to fetch bf16 op file."
+        } )
+    hmp_fp32: Optional[str]=field(
+        default="",
+        metadata = {
+            "help": "path to fetch fp32 op file."
+        })
+    hmp_opt_level: str = field(default="O1", metadata = {"help": "set opt level"})
+    hmp_verbose: bool = field(default=False, metadata={"help": "set hmp verbosity"})
     bf16: bool = field(default=False, metadata={"help": "use bfloat16; implies --tpu"})
     memory_efficient_bf16: bool = field(
         default=False,
@@ -269,6 +287,7 @@ class DistributedTrainingConfig(FairseqDataclass):
     distributed_rank: Optional[int] = field(
         default=0, metadata={"help": "rank of the current worker"}
     )
+    hpu: bool = II("common.hpu")
     distributed_backend: str = field(
         default="nccl", metadata={"help": "distributed backend"}
     )
