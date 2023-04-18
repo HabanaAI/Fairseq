@@ -1,5 +1,6 @@
 #!/usr/bin/env python3 -u
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -70,6 +71,13 @@ def main(cfg: FairseqConfig) -> None:
     if distributed_utils.is_master(cfg.distributed_training):
         checkpoint_utils.verify_checkpoint_directory(cfg.checkpoint.save_dir)
 
+    # Disable hpu dynamic shape
+    try:
+        import habana_frameworks.torch.hpu as ht
+        ht.disable_dynamic_shape()
+    except ImportError:
+        logger.info("habana_frameworks could Not be loaded")
+
     # Print args
     logger.info(cfg)
 
@@ -89,11 +97,28 @@ def main(cfg: FairseqConfig) -> None:
     assert cfg.criterion, "Please specify criterion to train a model"
 
     # Build model and criterion
+    if cfg.common.hpu_lazy_mode and cfg.common.hpu_graphs:
+        cfg.model.hpu_graphs = True
     if cfg.distributed_training.ddp_backend == "fully_sharded":
         with fsdp_enable_wrap(cfg.distributed_training):
             model = fsdp_wrap(task.build_model(cfg.model))
     else:
         model = task.build_model(cfg.model)
+    if cfg.common.hpu_lazy_mode and cfg.common.hpu_graphs:
+        import habana_frameworks.torch as ht
+        if cfg.common.hpu_graphs_qa_mode:
+            ht.hpu.ModuleCacher()(model=model,
+                                    inplace=True,
+                                    allow_unused_input=True,
+                                    have_grad_accumulation=True,
+                                    verbose=False)
+        else:
+            ht.hpu.ModuleCacher(max_graphs=6)(model=model,
+                                    inplace=True,
+                                    use_lfu=True,
+                                    allow_unused_input=True,
+                                    have_grad_accumulation=True,
+                                    verbose=False)
     criterion = task.build_criterion(cfg.criterion)
     logger.info(model)
     logger.info("task: {}".format(task.__class__.__name__))
@@ -148,7 +173,7 @@ def main(cfg: FairseqConfig) -> None:
     else:
         trainer = MegatronTrainer(cfg, task, model, criterion)
     logger.info(
-        "training on {} devices (GPUs/TPUs)".format(
+        "training on {} devices (GPUs/TPUs/HPUs)".format(
             cfg.distributed_training.distributed_world_size
         )
     )

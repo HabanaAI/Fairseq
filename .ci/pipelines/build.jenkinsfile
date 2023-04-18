@@ -1,0 +1,47 @@
+def stableBranch = GERRIT_BRANCH - '_next'
+src = library("pipeline-library@$stableBranch")
+
+def requiredArtifact = [
+    'SWTOOLS_SDK': ['bin', 'shared'],
+    'SYNAPSE': ['test', 'shared'],
+    'SYNAPSE_PROFILER': ['bin', 'shared'],
+    'SYNAPSE_UTILS' : ['bin', 'shared'],
+    'HL_THUNK': ['test', 'shared'],
+    'SCAL': ['test', 'shared', 'header'],
+    'ELFTOOLS': ['bin', 'shared'],
+    'TPC_KERNELS': ['test', 'shared'],
+    'TPC_FUSER': ['bin', 'shared'],
+    'TPC_LLVM': ['bin', 'bin_generic', 'util', 'shared'],
+    'ENGINES_FW': ['test', 'shared', 'config', 'data'],
+    'HABANA_REGS_CLI': ['bin'],
+    'HVL_MEDIA': ['shared'],
+    'MEDIA': ['shared'],
+    'COMPLEX_GUID': ['shared'],
+    'PYTORCH': ['test', 'data'],
+    'HCL': ['shared'],
+    'FFMPEG_FORK': ['shared'],
+    'CODEC' : ['shared']
+]
+
+def testDependencies = [
+    'SWTOOLS_SDK',
+    'SYNAPSE',
+    'SYNAPSE_UTILS',
+    'CODEC',
+    'TPC_KERNELS',
+    'TPC_FUSER',
+    'TPC_LLVM',
+    'SYNAPSE_PROFILER',
+    'HL_THUNK',
+    'COMPLEX_GUID',
+    'MEDIA',
+    'PYTORCH_MODULES',
+    'HCL',
+]
+
+genericBuilder(
+    src: src,
+    requiredArtifact: requiredArtifact,
+    testDependencies: testDependencies,
+    manifest: manifest
+)
