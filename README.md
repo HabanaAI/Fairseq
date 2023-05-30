@@ -11,6 +11,19 @@
 </p>
 
 --------------------------------------------------------------------------------
+# Fairseq Habana
+This folder contains a forked repo of fairseq and includes models running on Habana device to achieve state of the art accuracy. To obtain more details about a specific model
+(including requirements & installation instructions), refer to the individual model readme.
+
+For more information on running training and inference deep learning models using Habana devices, visit [developer.habana.ai](https://developer.habana.ai/resources/).
+For model performance data, refer to the [Habana Model Performance Data page](https://developer.habana.ai/resources/habana-training-models/#performance).
+
+## Models Enabled on Habana Devices
+  - [Wave2Vec 2.0](examples/wav2vec/README.md)
+  - [Transformer](examples/translation/README.md)
+
+--------------------------------------------------------------------------------
+# Fairseq General Content
 
 Fairseq(-py) is a sequence modeling toolkit that allows researchers and
 developers to train custom models for translation, summarization, language

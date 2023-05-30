@@ -1,301 +1,218 @@
-# Neural Machine Translation
+# Transformer for PyTorch
+## Table of Contents
+- [Model Overview](#model-overview)
+- [Setup](#setup)
+- [Traning Examples](#training-examples)
+- [Supported Configurations](#supported-configurations)
+- [Changelog](#changelog)
+- [Known Issues](#known-issues)
 
-This README contains instructions for [using pretrained translation models](#example-usage-torchhub)
-as well as [training new models](#training-a-new-model).
 
-## Pre-trained models
+## Model Overview
+The Transformer is a Neural Machine Translation (NMT) model which uses attention mechanism to boost training speed and overall accuracy. The model was initially introduced in [Attention Is All You Need](https://arxiv.org/abs/1706.03762) (Vaswani et al., 2017). The training was implemented using WMT16 training dataset, whereas for validation/test WMT14 dataset. BLEU score was calculated using sacrebleu utility (beam_size=4, length_penalty=0.6) on raw text translated data (i.e the decoder tokenized output was detokenized using sacremoses before it was input to the sacrebleu calculator).
 
-Model | Description | Dataset | Download
----|---|---|---
-`conv.wmt14.en-fr` | Convolutional <br> ([Gehring et al., 2017](https://arxiv.org/abs/1705.03122)) | [WMT14 English-French](http://statmt.org/wmt14/translation-task.html#Download) | model: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/models/wmt14.v2.en-fr.fconv-py.tar.bz2) <br> newstest2014: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/data/wmt14.v2.en-fr.newstest2014.tar.bz2) <br> newstest2012/2013: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/data/wmt14.v2.en-fr.ntst1213.tar.bz2)
-`conv.wmt14.en-de` | Convolutional <br> ([Gehring et al., 2017](https://arxiv.org/abs/1705.03122)) | [WMT14 English-German](http://statmt.org/wmt14/translation-task.html#Download) | model: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/models/wmt14.en-de.fconv-py.tar.bz2) <br> newstest2014: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/data/wmt14.en-de.newstest2014.tar.bz2)
-`conv.wmt17.en-de` | Convolutional <br> ([Gehring et al., 2017](https://arxiv.org/abs/1705.03122)) | [WMT17 English-German](http://statmt.org/wmt17/translation-task.html#Download) | model: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/models/wmt17.v2.en-de.fconv-py.tar.bz2) <br> newstest2014: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/data/wmt17.v2.en-de.newstest2014.tar.bz2)
-`transformer.wmt14.en-fr` | Transformer <br> ([Ott et al., 2018](https://arxiv.org/abs/1806.00187)) | [WMT14 English-French](http://statmt.org/wmt14/translation-task.html#Download) | model: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/models/wmt14.en-fr.joined-dict.transformer.tar.bz2) <br> newstest2014: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/data/wmt14.en-fr.joined-dict.newstest2014.tar.bz2)
-`transformer.wmt16.en-de` | Transformer <br> ([Ott et al., 2018](https://arxiv.org/abs/1806.00187)) | [WMT16 English-German](https://drive.google.com/uc?export=download&id=0B_bZck-ksdkpM25jRUN2X2UxMm8) | model: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/models/wmt16.en-de.joined-dict.transformer.tar.bz2) <br> newstest2014: <br> [download (.tar.bz2)](https://dl.fbaipublicfiles.com/fairseq/data/wmt16.en-de.joined-dict.newstest2014.tar.bz2)
-`transformer.wmt18.en-de` | Transformer <br> ([Edunov et al., 2018](https://arxiv.org/abs/1808.09381)) <br> WMT'18 winner | [WMT'18 English-German](http://www.statmt.org/wmt18/translation-task.html) | model: <br> [download (.tar.gz)](https://dl.fbaipublicfiles.com/fairseq/models/wmt18.en-de.ensemble.tar.gz) <br> See NOTE in the archive
-`transformer.wmt19.en-de` | Transformer <br> ([Ng et al., 2019](https://arxiv.org/abs/1907.06616)) <br> WMT'19 winner | [WMT'19 English-German](http://www.statmt.org/wmt19/translation-task.html) | model: <br> [download (.tar.gz)](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.en-de.joined-dict.ensemble.tar.gz)
-`transformer.wmt19.de-en` | Transformer <br> ([Ng et al., 2019](https://arxiv.org/abs/1907.06616)) <br> WMT'19 winner | [WMT'19 German-English](http://www.statmt.org/wmt19/translation-task.html) | model: <br> [download (.tar.gz)](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.de-en.joined-dict.ensemble.tar.gz)
-`transformer.wmt19.en-ru` | Transformer <br> ([Ng et al., 2019](https://arxiv.org/abs/1907.06616)) <br> WMT'19 winner | [WMT'19 English-Russian](http://www.statmt.org/wmt19/translation-task.html) | model: <br> [download (.tar.gz)](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.en-ru.ensemble.tar.gz)
-`transformer.wmt19.ru-en` | Transformer <br> ([Ng et al., 2019](https://arxiv.org/abs/1907.06616)) <br> WMT'19 winner | [WMT'19 Russian-English](http://www.statmt.org/wmt19/translation-task.html) | model: <br> [download (.tar.gz)](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.ru-en.ensemble.tar.gz)
+The Transformer demos included in this release are Eager mode and Lazy mode training for max-tokens 4096 with FP32 and BF16 mixed precision. Multi-card (1 server = 8 cards) training is supported for Transformer with BF16 mixed precision in Lazy mode.
 
-## Example usage (torch.hub)
+### Model Architecture
 
-We require a few additional Python dependencies for preprocessing:
-```bash
-pip install fastBPE sacremoses subword_nmt
-```
+The Transformer model uses standard NMT encoder-decoder architecture. Unlike other NMT models, not only it does not use recurrent connections, but also operates on fixed size context window.
+The encoder contains input embedding and positional encoding followed by stack which is made up of N identical layers. Each layer is composed of the following sub-layers:
 
-Interactive translation via PyTorch Hub:
-```python
-import torch
+  - Self-attention layer
+  - Feedforward network (2 fully-connected layers)
 
-# List available models
-torch.hub.list('pytorch/fairseq')  # [..., 'transformer.wmt16.en-de', ... ]
+The decoder stack is also made up output embedding and positional encoding of N identical layers. Each layer is composed of the following sub-layers:
 
-# Load a transformer trained on WMT'16 En-De
-# Note: WMT'19 models use fastBPE instead of subword_nmt, see instructions below
-en2de = torch.hub.load('pytorch/fairseq', 'transformer.wmt16.en-de',
-                       tokenizer='moses', bpe='subword_nmt')
-en2de.eval()  # disable dropout
+  - Self-attention layer
+  - Multi-headed attention layer combining encoder outputs with results from the previous self-attention layer.
+  - Feedforward network (2 fully-connected layers)
 
-# The underlying model is available under the *models* attribute
-assert isinstance(en2de.models[0], fairseq.models.transformer.TransformerModel)
+The encoder uses self-attention to compute a representation of the input sequence. The decoder generates the output sequence one token at a time, taking the encoder output and previous decoder-outputted tokens as inputs. The model also applies embeddings on the input and output tokens, and adds a constant positional encoding. The positional encoding adds information about the position of each token.
 
-# Move model to GPU for faster translation
-en2de.cuda()
+## Setup
 
-# Translate a sentence
-en2de.translate('Hello world!')
-# 'Hallo Welt!'
+Please follow the instructions provided in the [Gaudi Installation Guide](https://docs.habana.ai/en/latest/Installation_Guide/index.html) 
+to set up the environment including the `$PYTHON` environment variable. To achieve the best performance, please follow the methods outlined in the [Optimizing Training Platform guide](https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_Training_Platform.html).
+The guides will walk you through the process of setting up your system to run the model on Gaudi.  
 
-# Batched translation
-en2de.translate(['Hello world!', 'The cat sat on the mat.'])
-# ['Hallo Welt!', 'Die Katze saß auf der Matte.']
-```
+### Clone HabanaAI/fairseq
 
-Loading custom models:
-```python
-from fairseq.models.transformer import TransformerModel
-zh2en = TransformerModel.from_pretrained(
-  '/path/to/checkpoints',
-  checkpoint_file='checkpoint_best.pt',
-  data_name_or_path='data-bin/wmt17_zh_en_full',
-  bpe='subword_nmt',
-  bpe_codes='data-bin/wmt17_zh_en_full/zh.code'
-)
-zh2en.translate('你好 世界')
-# 'Hello World'
-```
-
-If you are using a `transformer.wmt19` models, you will need to set the `bpe`
-argument to `'fastbpe'` and (optionally) load the 4-model ensemble:
-```python
-en2de = torch.hub.load('pytorch/fairseq', 'transformer.wmt19.en-de',
-                       checkpoint_file='model1.pt:model2.pt:model3.pt:model4.pt',
-                       tokenizer='moses', bpe='fastbpe')
-en2de.eval()  # disable dropout
-```
-
-## Example usage (CLI tools)
-
-Generation with the binarized test sets can be run in batch mode as follows, e.g. for WMT 2014 English-French on a GTX-1080ti:
-```bash
-mkdir -p data-bin
-curl https://dl.fbaipublicfiles.com/fairseq/models/wmt14.v2.en-fr.fconv-py.tar.bz2 | tar xvjf - -C data-bin
-curl https://dl.fbaipublicfiles.com/fairseq/data/wmt14.v2.en-fr.newstest2014.tar.bz2 | tar xvjf - -C data-bin
-fairseq-generate data-bin/wmt14.en-fr.newstest2014  \
-    --path data-bin/wmt14.en-fr.fconv-py/model.pt \
-    --beam 5 --batch-size 128 --remove-bpe | tee /tmp/gen.out
-# ...
-# | Translated 3003 sentences (96311 tokens) in 166.0s (580.04 tokens/s)
-# | Generate test with beam=5: BLEU4 = 40.83, 67.5/46.9/34.4/25.5 (BP=1.000, ratio=1.006, syslen=83262, reflen=82787)
-
-# Compute BLEU score
-grep ^H /tmp/gen.out | cut -f3- > /tmp/gen.out.sys
-grep ^T /tmp/gen.out | cut -f2- > /tmp/gen.out.ref
-fairseq-score --sys /tmp/gen.out.sys --ref /tmp/gen.out.ref
-# BLEU4 = 40.83, 67.5/46.9/34.4/25.5 (BP=1.000, ratio=1.006, syslen=83262, reflen=82787)
-```
-
-## Training a new model
-
-### IWSLT'14 German to English (Transformer)
-
-The following instructions can be used to train a Transformer model on the [IWSLT'14 German to English dataset](http://workshop2014.iwslt.org/downloads/proceeding.pdf).
-
-First download and preprocess the data:
-```bash
-# Download and prepare the data
-cd examples/translation/
-bash prepare-iwslt14.sh
-cd ../..
-
-# Preprocess/binarize the data
-TEXT=examples/translation/iwslt14.tokenized.de-en
-fairseq-preprocess --source-lang de --target-lang en \
-    --trainpref $TEXT/train --validpref $TEXT/valid --testpref $TEXT/test \
-    --destdir data-bin/iwslt14.tokenized.de-en \
-    --workers 20
-```
-
-Next we'll train a Transformer translation model over this data:
-```bash
-CUDA_VISIBLE_DEVICES=0 fairseq-train \
-    data-bin/iwslt14.tokenized.de-en \
-    --arch transformer_iwslt_de_en --share-decoder-input-output-embed \
-    --optimizer adam --adam-betas '(0.9, 0.98)' --clip-norm 0.0 \
-    --lr 5e-4 --lr-scheduler inverse_sqrt --warmup-updates 4000 \
-    --dropout 0.3 --weight-decay 0.0001 \
-    --criterion label_smoothed_cross_entropy --label-smoothing 0.1 \
-    --max-tokens 4096 \
-    --eval-bleu \
-    --eval-bleu-args '{"beam": 5, "max_len_a": 1.2, "max_len_b": 10}' \
-    --eval-bleu-detok moses \
-    --eval-bleu-remove-bpe \
-    --eval-bleu-print-samples \
-    --best-checkpoint-metric bleu --maximize-best-checkpoint-metric
-```
-
-Finally we can evaluate our trained model:
-```bash
-fairseq-generate data-bin/iwslt14.tokenized.de-en \
-    --path checkpoints/checkpoint_best.pt \
-    --batch-size 128 --beam 5 --remove-bpe
-```
-
-### WMT'14 English to German (Convolutional)
-
-The following instructions can be used to train a Convolutional translation model on the WMT English to German dataset.
-See the [Scaling NMT README](../scaling_nmt/README.md) for instructions to train a Transformer translation model on this data.
-
-The WMT English to German dataset can be preprocessed using the `prepare-wmt14en2de.sh` script.
-By default it will produce a dataset that was modeled after [Attention Is All You Need (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762), but with additional news-commentary-v12 data from WMT'17.
-
-To use only data available in WMT'14 or to replicate results obtained in the original [Convolutional Sequence to Sequence Learning (Gehring et al., 2017)](https://arxiv.org/abs/1705.03122) paper, please use the `--icml17` option.
+In the docker container, clone this repository and switch to the branch that matches your SynapseAI version. You can run the [`hl-smi`](https://docs.habana.ai/en/latest/Management_and_Monitoring/System_Management_Tools_Guide/System_Management_Tools.html#hl-smi-utility-options) utility to determine the SynapseAI version.
 
 ```bash
-# Download and prepare the data
-cd examples/translation/
-# WMT'17 data:
-bash prepare-wmt14en2de.sh
-# or to use WMT'14 data:
-# bash prepare-wmt14en2de.sh --icml17
-cd ../..
+git clone -b [SynapseAI version] https://github.com/HabanaAI/fairseq
+```
 
-# Binarize the dataset
-TEXT=examples/translation/wmt17_en_de
+**Note:** If fairseq repository path is not in the PYTHONPATH, make sure you update it:
+```bash
+export PYTHONPATH=$PYTHONPATH:/root/fairseq
+```
+
+### Download the Dataset
+
+1. To download the dataset, use seq2seq GitHub project:
+```
+git clone https://github.com/google/seq2seq.git
+cd seq2seq
+```
+2. Update BASE_DIR=<path to seq2seq parent directory> in `bin/data/wmt16_en_de.sh` and run the following:
+
+**NOTE:** The data will be generated in the `OUTPUT_DIR`.
+```
+export OUTPUT_DIR=/data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k
+bash bin/data/wmt16_en_de.sh
+```
+
+### Install Model Requirements
+
+1. Install the required Python packages in the container:
+```
+ pip install -r fairseq/requirements.txt
+```
+2. Install Fairseq module:
+```
+pip install fairseq/.
+```
+
+### Pre-process the Data
+
+1. To pre-process the data, run the following:
+
+```
+TEXT=/data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k
 fairseq-preprocess \
     --source-lang en --target-lang de \
-    --trainpref $TEXT/train --validpref $TEXT/valid --testpref $TEXT/test \
-    --destdir data-bin/wmt17_en_de --thresholdtgt 0 --thresholdsrc 0 \
+    --trainpref $TEXT/train.tok.clean.bpe.32000 \
+    --validpref $TEXT/newstest2013.tok.bpe.32000 \
+    --testpref $TEXT/newstest2014.tok.bpe.32000 \
+    --destdir data-bin/wmt16_en_de_bpe32k \
+    --nwordssrc 32768 --nwordstgt 32768 \
+    --joined-dictionary \
     --workers 20
-
-# Train the model
-mkdir -p checkpoints/fconv_wmt_en_de
-fairseq-train \
-    data-bin/wmt17_en_de \
-    --arch fconv_wmt_en_de \
-    --dropout 0.2 \
-    --criterion label_smoothed_cross_entropy --label-smoothing 0.1 \
-    --optimizer nag --clip-norm 0.1 \
-    --lr 0.5 --lr-scheduler fixed --force-anneal 50 \
-    --max-tokens 4000 \
-    --save-dir checkpoints/fconv_wmt_en_de
-
-# Evaluate
-fairseq-generate data-bin/wmt17_en_de \
-    --path checkpoints/fconv_wmt_en_de/checkpoint_best.pt \
-    --beam 5 --remove-bpe
 ```
 
-### WMT'14 English to French
-```bash
-# Download and prepare the data
-cd examples/translation/
-bash prepare-wmt14en2fr.sh
-cd ../..
-
-# Binarize the dataset
-TEXT=examples/translation/wmt14_en_fr
-fairseq-preprocess \
-    --source-lang en --target-lang fr \
-    --trainpref $TEXT/train --validpref $TEXT/valid --testpref $TEXT/test \
-    --destdir data-bin/wmt14_en_fr --thresholdtgt 0 --thresholdsrc 0 \
-    --workers 60
-
-# Train the model
-mkdir -p checkpoints/fconv_wmt_en_fr
-fairseq-train \
-    data-bin/wmt14_en_fr \
-    --arch fconv_wmt_en_fr \
-    --dropout 0.1 \
-    --criterion label_smoothed_cross_entropy --label-smoothing 0.1 \
-    --optimizer nag --clip-norm 0.1 \
-    --lr 0.5 --lr-scheduler fixed --force-anneal 50 \
-    --max-tokens 3000 \
-    --save-dir checkpoints/fconv_wmt_en_fr
-
-# Evaluate
-fairseq-generate \
-    data-bin/fconv_wmt_en_fr \
-    --path checkpoints/fconv_wmt_en_fr/checkpoint_best.pt \
-    --beam 5 --remove-bpe
+2. Copy the `bpe.32000` file from `$TEXT` to the destdir with name `bpe.code`:
+```
+cp $TEXT/bpe.32000 $TEXT/bpe.code
 ```
 
-## Multilingual Translation
+## Training Examples
 
-We also support training multilingual translation models. In this example we'll
-train a multilingual `{de,fr}-en` translation model using the IWSLT'17 datasets.
+**NOTE:** The training examples are applicable for first-gen Gaudi and **Gaudi2**
 
-Note that we use slightly different preprocessing here than for the IWSLT'14
-En-De data above. In particular we learn a joint BPE code for all three
-languages and use fairseq-interactive and sacrebleu for scoring the test set.
+### Single Card and Multi-Card Training Examples
 
-```bash
-# First install sacrebleu and sentencepiece
-pip install sacrebleu sentencepiece
+- To see all CommandLine options, run `$PYTHON fairseq_cli/train.py  -h`.
+- For BLEU score calculation, use sacreBLEU module after the training.
 
-# Then download and preprocess the data
-cd examples/translation/
-bash prepare-iwslt17-multilingual.sh
-cd ../..
+**Run training on 1 HPU:**
 
-# Binarize the de-en dataset
-TEXT=examples/translation/iwslt17.de_fr.en.bpe16k
-fairseq-preprocess --source-lang de --target-lang en \
-    --trainpref $TEXT/train.bpe.de-en \
-    --validpref $TEXT/valid0.bpe.de-en,$TEXT/valid1.bpe.de-en,$TEXT/valid2.bpe.de-en,$TEXT/valid3.bpe.de-en,$TEXT/valid4.bpe.de-en,$TEXT/valid5.bpe.de-en \
-    --destdir data-bin/iwslt17.de_fr.en.bpe16k \
-    --workers 10
+- 1 HPU in lazy mode, BF16 mixed precision, max-tokens 4096 for training and BLEU score calculation:
+  ```
+  # training
+  $PYTHON fairseq_cli/train.py /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --arch=transformer_wmt_en_de_big --lr=0.0005 --clip-norm=0.0 --dropout=0.3 --max-tokens=4096 --weight-decay=0.0 --criterion=label_smoothed_cross_entropy --label-smoothing=0.1 --update-freq=13 --save-interval-updates=3000 --save-interval=10 --validate-interval=20 --keep-interval-updates=20 --log-format=simple --log-interval=20 --share-all-embeddings --num-batch-buckets=10 --save-dir=/tmp/fairseq_transformer_wmt_en_de_big/checkpoint --tensorboard-logdir=/tmp/fairseq_transformer_wmt_en_de_big/tensorboard --maximize-best-checkpoint-metric --max-source-positions=256 --max-target-positions=256 --max-update=30000 --warmup-updates=4000 --warmup-init-lr=1e-07 --lr-scheduler=inverse_sqrt --no-epoch-checkpoints --bf16 --optimizer=adam --adam-betas="(0.9, 0.98)" --hpu
+  # evaluation
+  sacrebleu -t wmt14 -l en-de --echo src | fairseq-interactive /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --path /tmp/fairseq_transformer_wmt_en_de_big/checkpoint/checkpoint_last.pt -s en -t de --batch-size 32 --buffer-size 1024 --beam 4 --lenpen 0.6 --remove-bpe --max-len-a 1.2 --max-len-b 10 --bpe subword_nmt --bpe-codes /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k/bpe.code --tokenizer moses --moses-no-dash-splits --hpu | tee /tmp/.eval_out.txt | grep ^H- | cut -f 3- | sacrebleu -t wmt14 -l en-de
+  ```
 
-# Binarize the fr-en dataset
-# NOTE: it's important to reuse the en dictionary from the previous step
-fairseq-preprocess --source-lang fr --target-lang en \
-    --trainpref $TEXT/train.bpe.fr-en \
-    --validpref $TEXT/valid0.bpe.fr-en,$TEXT/valid1.bpe.fr-en,$TEXT/valid2.bpe.fr-en,$TEXT/valid3.bpe.fr-en,$TEXT/valid4.bpe.fr-en,$TEXT/valid5.bpe.fr-en \
-    --tgtdict data-bin/iwslt17.de_fr.en.bpe16k/dict.en.txt \
-    --destdir data-bin/iwslt17.de_fr.en.bpe16k \
-    --workers 10
+- 1 HPU in lazy mode, FP32, max-tokens 4096 for training and BLEU score calculation:
 
-# Train a multilingual transformer model
-# NOTE: the command below assumes 1 GPU, but accumulates gradients from
-#       8 fwd/bwd passes to simulate training on 8 GPUs
-mkdir -p checkpoints/multilingual_transformer
-CUDA_VISIBLE_DEVICES=0 fairseq-train data-bin/iwslt17.de_fr.en.bpe16k/ \
-    --max-epoch 50 \
-    --ddp-backend=legacy_ddp \
-    --task multilingual_translation --lang-pairs de-en,fr-en \
-    --arch multilingual_transformer_iwslt_de_en \
-    --share-decoders --share-decoder-input-output-embed \
-    --optimizer adam --adam-betas '(0.9, 0.98)' \
-    --lr 0.0005 --lr-scheduler inverse_sqrt \
-    --warmup-updates 4000 --warmup-init-lr '1e-07' \
-    --label-smoothing 0.1 --criterion label_smoothed_cross_entropy \
-    --dropout 0.3 --weight-decay 0.0001 \
-    --save-dir checkpoints/multilingual_transformer \
-    --max-tokens 4000 \
-    --update-freq 8
+  ```
+  # training
+  $PYTHON fairseq_cli/train.py /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --arch=transformer_wmt_en_de_big --lr=0.0005 --clip-norm=0.0 --dropout=0.3 --max-tokens=4096 --weight-decay=0.0 --criterion=label_smoothed_cross_entropy --label-smoothing=0.1 --update-freq=13 --save-interval-updates=3000 --save-interval=10 --validate-interval=20 --keep-interval-updates=20 --log-format=simple --log-interval=20 --share-all-embeddings --num-batch-buckets=10 --save-dir=/tmp/fairseq_transformer_wmt_en_de_big/checkpoint --tensorboard-logdir=/tmp/fairseq_transformer_wmt_en_de_big/tensorboard --maximize-best-checkpoint-metric --max-source-positions=256 --max-target-positions=256 --max-update=30000 --warmup-updates=4000 --warmup-init-lr=1e-07 --lr-scheduler=inverse_sqrt --no-epoch-checkpoints --optimizer=adam --adam-betas="(0.9, 0.98)" --hpu
+  # evaluation
+  sacrebleu -t wmt14 -l en-de --echo src | fairseq-interactive /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --path /tmp/fairseq_transformer_wmt_en_de_big/checkpoint/checkpoint_last.pt -s en -t de --batch-size 32 --buffer-size 1024 --beam 4 --lenpen 0.6 --remove-bpe --max-len-a  1.2 --max-len-b 10 --bpe subword_nmt --bpe-codes /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k/bpe.code --tokenizer moses --moses-no-dash-splits --hpu | tee /tmp/.eval_out.txt | grep ^H- | cut -f 3- | sacrebleu -t wmt14 -l en-de
+  ```
 
-# Generate and score the test set with sacrebleu
-SRC=de
-sacrebleu --test-set iwslt17 --language-pair ${SRC}-en --echo src \
-    | python scripts/spm_encode.py --model examples/translation/iwslt17.de_fr.en.bpe16k/sentencepiece.bpe.model \
-    > iwslt17.test.${SRC}-en.${SRC}.bpe
-cat iwslt17.test.${SRC}-en.${SRC}.bpe \
-    | fairseq-interactive data-bin/iwslt17.de_fr.en.bpe16k/ \
-      --task multilingual_translation --lang-pairs de-en,fr-en \
-      --source-lang ${SRC} --target-lang en \
-      --path checkpoints/multilingual_transformer/checkpoint_best.pt \
-      --buffer-size 2000 --batch-size 128 \
-      --beam 5 --remove-bpe=sentencepiece \
-    > iwslt17.test.${SRC}-en.en.sys
-grep ^H iwslt17.test.${SRC}-en.en.sys | cut -f3 \
-    | sacrebleu --test-set iwslt17 --language-pair ${SRC}-en
-```
+- 1 HPU in eager mode, BF16 mixed precision, max-tokens 4096 for training and BLEU score calculation:
 
-##### Argument format during inference
+  ```
+  # training
+  $PYTHON fairseq_cli/train.py /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --arch=transformer_wmt_en_de_big --lr=0.0005 --clip-norm=0.0 --dropout=0.3 --max-tokens=4096 --weight-decay=0.0 --criterion=label_smoothed_cross_entropy --label-smoothing=0.1 --update-freq=13 --save-interval-updates=3000 --save-interval=10 --validate-interval=20 --keep-interval-updates=20 --log-format=simple --log-interval=20 --share-all-embeddings --num-batch-buckets=10 --save-dir=/tmp/fairseq_transformer_wmt_en_de_big/checkpoint --tensorboard-logdir=/tmp/fairseq_transformer_wmt_en_de_big/tensorboard --maximize-best-checkpoint-metric --max-source-positions=256 --max-target-positions=256 --max-update=30000 --warmup-updates=4000 --warmup-init-lr=1e-07 --lr-scheduler=inverse_sqrt --no-epoch-checkpoints --bf16 --optimizer=adam --adam-betas="(0.9, 0.98)" --hpu --hpu-lazy-mode='False'
+  # evaluation
+  sacrebleu -t wmt14 -l en-de --echo src | fairseq-interactive /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --path /tmp/fairseq_transformer_wmt_en_de_big/checkpoint/checkpoint_last.pt -s en -t de --batch-size 32 --buffer-size 1024 --beam 4 --lenpen 0.6 --remove-bpe --max-len-a  1.2 --max-len-b 10 --bpe subword_nmt --bpe-codes /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k/bpe.code --tokenizer moses --moses-no-dash-splits --hpu --hpu-lazy-mode='False' | tee /tmp/.eval_out.txt | grep ^H- | cut -f 3- | sacrebleu -t wmt14 -l en-de
+  ```
 
-During inference it is required to specify a single `--source-lang` and
-`--target-lang`, which indicates the inference langauge direction.
-`--lang-pairs`, `--encoder-langtok`, `--decoder-langtok` have to be set to
-the same value as training.
+**Run training on 8 HPUs:**
+
+To run multi-card demo, make sure to set the following prior to the training:
+- The host machine has 512 GB of RAM installed.
+
+**NOTE:** mpirun map-by PE attribute value may vary on your setup. For the recommended calculation, refer to the instructions detailed in [mpirun Configuration](https://docs.habana.ai/en/latest/PyTorch/PyTorch_Scaling_Guide/DDP_Based_Scaling.html#mpirun-configuration).
+
+- 8 HPUs in lazy mode, BF16 mixed precision, max-tokens 4096 for training and BLEU score calculation:
+
+  ```
+  # training
+  export MASTER_ADDR="localhost"
+  export MASTER_PORT="12345"
+  mpirun -n 8 --bind-to core --map-by socket:PE=6 --rank-by core --report-bindings --allow-run-as-root $PYTHON fairseq_cli/train.py /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --arch=transformer_wmt_en_de_big --lr=0.0005 --clip-norm=0.0 --dropout=0.3 --max-tokens=4096 --weight-decay=0.0 --criterion=label_smoothed_cross_entropy --label-smoothing=0.1 --update-freq=13 --save-interval-updates=3000 --save-interval=10 --validate-interval=20 --keep-interval-updates=20 --log-format=simple --log-interval=1 --share-all-embeddings --num-batch-buckets=10 --save-dir=/tmp/fairseq_transformer_wmt_en_de_big/checkpoint --tensorboard-logdir=/tmp/fairseq_transformer_wmt_en_de_big/tensorboard --maximize-best-checkpoint-metric --max-source-positions=256 --max-target-positions=256 --max-update=30000 --warmup-updates=4000 --warmup-init-lr=1e-07 --lr-scheduler=inverse_sqrt --no-epoch-checkpoints --eval-bleu-args='{"beam":4,"max_len_a":1.2,"max_len_b":10}' --eval-bleu-detok=moses --eval-bleu-remove-bpe --eval-bleu-print-samples --eval-bleu --bf16 --optimizer=adam --adam-betas="(0.9, 0.98)" --hpu --distributed-world-size=8 --bucket-cap-mb=230
+  # evaluation
+  sacrebleu -t wmt14 -l en-de --echo src | fairseq-interactive /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --path /tmp/fairseq_transformer_wmt_en_de_big/checkpoint/checkpoint_last.pt -s en -t de --batch-size 32 --buffer-size 1024 --beam 4 --lenpen 0.6 --remove-bpe --max-len-a  1.2 --max-len-b 10 --bpe subword_nmt --bpe-codes /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k/bpe.code --tokenizer moses --moses-no-dash-splits --hpu | tee /tmp/.eval_out.txt | grep ^H- | cut -f 3- | sacrebleu -t wmt14 -l en-de
+  ```
+- 8 HPUs in lazy mode, FP32,  max-tokens 4096 for training and BLEU score calculation:
+
+  ```
+  # training
+  export MASTER_ADDR="localhost"
+  export MASTER_PORT="12345"
+  mpirun -n 8 --bind-to core --map-by slot:PE=6 --rank-by core --report-bindings --allow-run-as-root $PYTHON fairseq_cli/train.py /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --arch=transformer_wmt_en_de_big --lr=0.0005 --clip-norm=0.0 --dropout=0.3 --max-tokens=4096 --weight-decay=0.0 --criterion=label_smoothed_cross_entropy --label-smoothing=0.1 --update-freq=13 --save-interval-updates=3000 --save-interval=10 --validate-interval=20 --keep-interval-updates=20 --log-format=simple --log-interval=1 --share-all-embeddings --num-batch-buckets=10 --save-dir=/tmp/fairseq_transformer_wmt_en_de_big/checkpoint --tensorboard-logdir=/tmp/fairseq_transformer_wmt_en_de_big/tensorboard --maximize-best-checkpoint-metric --max-source-positions=256 --max-target-positions=256 --max-update=30000 --warmup-updates=4000 --warmup-init-lr=1e-07 --lr-scheduler=inverse_sqrt --no-epoch-checkpoints --optimizer=adam --adam-betas="(0.9, 0.98)" --hpu --distributed-world-size=8 --bucket-cap-mb=230
+  # evaluation
+  sacrebleu -t wmt14 -l en-de --echo src | fairseq-interactive /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k --path /tmp/fairseq_transformer_wmt_en_de_big/checkpoint/checkpoint_last.pt -s en -t de --batch-size 32 --buffer-size 1024 --beam 4 --lenpen 0.6 --remove-bpe --max-len-a  1.2 --max-len-b 10 --bpe subword_nmt --bpe-codes /data/pytorch/Fairseq/transformer-LT/wmt16_en_de_bpe32k/bpe.code --tokenizer moses --moses-no-dash-splits --hpu | tee /tmp/.eval_out.txt | grep ^H- | cut -f 3- | sacrebleu -t wmt14 -l en-de
+  ```
+
+## Supported Configurations
+
+| Validated on | SynapseAI Version | PyTorch Version | Mode     |
+|--------------|-------------------|-----------------|----------|
+| Gaudi        | 1.10.0            | 2.0.1           | Training |
+| Gaudi2       | 1.10.0            | 2.0.1           | Training | 
+
+## Changelog
+
+### Past changes (ported from HabanaAI/model_garden repo)
+1. Forcing softmax operator always with dtype fp32 is removed.
+2. Added support for 1 and 8 card training on **Gaudi2**
+3. Simplified the distributed initialization.
+4. Removed unsupported examples.
+5. In Evaluation graph, removed cpu fallbacks and reduced the frequency of mark_step() call.
+6. Removed Fused clip norm.
+7. Lazy mode is set as default execution mode,for eager mode set --use-lazy-mode as False.
+8. Removed redundant import of htcore from model scripts.
+9. Added distributed barrier to synchronize the host process.
+10. setup_requirement for numpy version is set to 1.22.2 for python version 3.8.
+11. Most of the pytorch ops are moved to hpu in the evaluation graph.
+12. Changes related to single worker thread is removed.
+13. Enabled HCCL flow for distributed training.
+14. Data dependent control loops are avoided in encoder and decoder.
+15. Reduce and stats collection based on every log_interval steps and log_interval is set to 20 in single node.
+16. Evaluation with Bleu score is added part of training and reduced the frequency of evaluation
+17. Multicard training is issue is fixed with data prepared from seq2seq github.
+
+### Training Script Modifications
+This section lists the training script modifications for the Transformer model.
+
+- Added support for Habana devices:
+  - Load Habana specific library.
+  - Required environment variables are defined for habana device.
+  - Support for distributed training on Habana device.
+  - Added changes to support Lazy mode with required mark_step().
+  - Changes for dynamic loading of HCCL library.
+  - Fairseq-interactive evaluation is enabled with Habana device support.
+  - Added distributed barrier to synchronize the host process
+  - Disable auto dynamic shape support for Habana devices.
+
+- To improve performance:
+  - Added support for Fused Adam optimizer.
+  - Bucket size set to 230MB for better performance in distributed training.
+  - Number of buckets for training is set to 10 and values are fixed for Habana device.
+  - Data dependent control loops are avoided in encoder and decoder.
+  - Reduce and stats collection based on every log_interval steps.(ex:log_interval=20 for single card).
+  - To get BLEU score accuracy of 27.5 set "--max-update" as "15000" which will reduce the total "time to train" by ~50%.
+
+## Known Issues
+1. Placing `mark_step()` arbitrarily may lead to undefined behavior. It is recommended to keep `mark_step()` as shown in the provided scripts.
+2. Evaluation of execution is not fully optimal, reduced frequency of execution is recommended in this release.
+3. Only scripts and configurations mentioned in this README are supported and verified.
+4. With grouped shuffling enabled and low update_freq, fluctuation may be observed in the training loss curve.
+   This is expected and the accuracy should not be affected.

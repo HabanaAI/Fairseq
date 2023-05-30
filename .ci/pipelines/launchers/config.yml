@@ -1,0 +1,11 @@
+launchers:
+- testToLaunch: fairseq_fork/Tests/Test_fairseq_fork_gaudi_hls_asic_pytorch_fairseq_topology
+  gerritTriggerMap:
+    - repository: fairseq-fork
+      files:
+        - "**"
+- testToLaunch: fairseq_fork/Tests/Test_fairseq_fork_gaudi2_asic_pytorch_fairseq_topology
+  gerritTriggerMap:
+    - repository: fairseq-fork
+      files:
+        - "**"

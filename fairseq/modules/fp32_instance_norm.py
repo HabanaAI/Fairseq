@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -32,4 +33,17 @@ class Fp32InstanceNorm(nn.InstanceNorm1d):
         )
         if self.transpose_last:
             output = output.transpose(1, 2)
+        return output.type_as(input)
+
+class Fp32InstanceNorm2d(nn.InstanceNorm2d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, input):
+        output = F.instance_norm(
+            input.float(),
+            weight = self.weight.float() if self.weight is not None else None,
+            bias = self.bias.float() if self.bias is not None else None,
+            eps = self.eps,
+        )
         return output.type_as(input)
