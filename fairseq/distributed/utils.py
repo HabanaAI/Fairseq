@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -42,6 +43,12 @@ logger = logging.getLogger(__name__)
 def is_master(cfg: DistributedTrainingConfig):
     return cfg.distributed_rank == 0
 
+def device_count(cfg: DistributedTrainingConfig):
+    if cfg.hpu:
+        import habana_frameworks.torch.hpu as hpu
+        return hpu.device_count()
+    else:
+        return torch.cuda.device_count()
 
 def infer_init_method(cfg: DistributedTrainingConfig, force_distributed=False):
     if cfg.distributed_init_method is not None or cfg.tpu:
@@ -67,10 +74,9 @@ def infer_init_method(cfg: DistributedTrainingConfig, force_distributed=False):
     if cfg.pipeline_model_parallel:
         _pipeline_parallel_post_init(cfg, num_pipeline_devices, num_pipelines_per_node)
     elif not cfg.distributed_no_spawn:
-        with open_dict(cfg):
-            cfg.distributed_num_procs = min(
-                torch.cuda.device_count(), cfg.distributed_world_size
-            )
+        cfg.distributed_num_procs = min(
+            device_count(cfg), cfg.distributed_world_size
+        )
 
 
 def _infer_torch_distributed_launch_init(cfg: DistributedTrainingConfig):
@@ -139,8 +145,8 @@ def _infer_slurm_init(cfg: DistributedTrainingConfig, num_pipelines_per_node):
 
 def _infer_single_node_init(cfg: DistributedTrainingConfig):
     assert (
-        cfg.distributed_world_size <= torch.cuda.device_count()
-    ), f"world size is {cfg.distributed_world_size} but have {torch.cuda.device_count()} available devices"
+        cfg.distributed_world_size <= device_count(cfg)
+    ), f"world size is {cfg.distributed_world_size} but have {device_count(cfg)} available devices"
     port = random.randint(10000, 20000)
     cfg.distributed_init_method = "tcp://localhost:{port}".format(port=port)
 
@@ -181,7 +187,7 @@ def _pipeline_parallel_pre_init(cfg: DistributedTrainingConfig):
         num_pipeline_devices = len(
             set(cfg.pipeline_encoder_devices + cfg.pipeline_decoder_devices)
         )
-    gpus_per_node = torch.cuda.device_count()
+    gpus_per_node = device_count(cfg)
     assert (
         gpus_per_node >= num_pipeline_devices
         and gpus_per_node % num_pipeline_devices == 0
@@ -205,7 +211,7 @@ def _pipeline_parallel_post_init(
         # In the case of 4-way MP on nodes with 8 GPUs, we want
         # distributed_rank to be the starting GPU index for each pipeline
         # i.e., 0, 2, ...
-        gpus_per_node = torch.cuda.device_count()
+        gpus_per_node = device_count(cfg)
         assert cfg.distributed_rank % gpus_per_node == 0
         assert cfg.distributed_rank % num_pipeline_devices == 0
 
@@ -254,6 +260,9 @@ def distributed_init(cfg: FairseqConfig):
                     cfg.distributed_training.distributed_init_method,
                 )
             )
+            if cfg.common.hpu:
+                cfg.distributed_training.distributed_backend = "hccl"
+                import habana_frameworks.torch.distributed.hccl
             dist.init_process_group(
                 backend=cfg.distributed_training.distributed_backend,
                 init_method=cfg.distributed_training.distributed_init_method,
@@ -319,6 +328,10 @@ def distributed_main(i, main, cfg: FairseqConfig, kwargs):
     if cfg.distributed_training.distributed_rank is None:  # torch.multiprocessing.spawn
         cfg.distributed_training.distributed_rank = kwargs.pop("start_rank", 0) + i
 
+    if cfg.common.hpu and cfg.distributed_training.distributed_world_size > 1:
+        import os
+        os.environ['ID'] = str(i)
+
     cfg.distributed_training.distributed_rank = distributed_init(cfg)
 
     after_distributed_init_fn = kwargs.pop("after_distributed_init_fn", None)
@@ -345,7 +358,7 @@ def call_main(cfg: FairseqConfig, main, **kwargs):
                 fn=distributed_main,
                 args=(main, cfg, kwargs),
                 nprocs=min(
-                    torch.cuda.device_count(),
+                    device_count(cfg.distributed_training),
                     cfg.distributed_training.distributed_world_size,
                 ),
                 join=True,
@@ -488,7 +501,7 @@ def get_model_parallel_world_size():
     return get_world_size(get_model_parallel_group())
 
 
-def all_reduce(tensor, group, op="sum"):
+def all_reduce(tensor, group, op="sum", async_op=False):
     if use_xla():
         assert isinstance(group, tuple) and group[0] == "tpu"
         tensor = [tensor]  # wrap in a list to make xm.all_reduce in-place
@@ -500,7 +513,7 @@ def all_reduce(tensor, group, op="sum"):
             op = dist.ReduceOp.MAX
         else:
             raise NotImplementedError
-        dist.all_reduce(tensor, op=op, group=group)
+        dist.all_reduce(tensor, op=op, group=group, async_op=async_op)
         return tensor
 
 
@@ -630,7 +643,7 @@ def all_gather_list(data, group=None, max_size=16384):
         )
 
 
-def all_reduce_dict(data: Mapping[str, Any], device, group) -> Dict[str, Any]:
+def all_reduce_dict(data: Mapping[str, Any], device, group, async_op=False) -> Dict[str, Any]:
     """
     AllReduce a dictionary of values across workers. We separately
     reduce items that are already on the device and items on CPU for
@@ -661,7 +674,7 @@ def all_reduce_dict(data: Mapping[str, Any], device, group) -> Dict[str, Any]:
         if len(data) == 0:
             return data
         buf = torch.cat([t.view(-1) for t in data.values()]).to(device=device)
-        all_reduce(buf, group=group)
+        all_reduce(buf, group=group, async_op=async_op)
         split_buf = torch.split(buf.clone(), [t.numel() for t in data.values()])
         reduced_data = [t.view_as(orig) for t, orig in zip(split_buf, data.values())]
         return OrderedDict(zip(data.keys(), reduced_data))

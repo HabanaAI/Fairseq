@@ -452,20 +452,34 @@ class SequenceGenerator(nn.Module):
                 eos_scores = torch.masked_select(
                     cand_scores[:, :beam_size], mask=eos_mask[:, :beam_size]
                 )
-
-                finalized_sents = self.finalize_hypos(
-                    step,
-                    eos_bbsz_idx,
-                    eos_scores,
-                    tokens,
-                    scores,
-                    finalized,
-                    finished,
-                    beam_size,
-                    attn,
-                    src_lengths,
-                    max_len,
-                )
+                if eos_mask.device.type == 'hpu':
+                    finalized_sents = self.finalize_hypos_hpu(
+                        step,
+                        eos_bbsz_idx,
+                        eos_scores,
+                        tokens,
+                        scores,
+                        finalized,
+                        finished,
+                        beam_size,
+                        attn,
+                        src_lengths,
+                        max_len,
+                    )
+                else:
+                    finalized_sents = self.finalize_hypos(
+                        step,
+                        eos_bbsz_idx,
+                        eos_scores,
+                        tokens,
+                        scores,
+                        finalized,
+                        finished,
+                        beam_size,
+                        attn,
+                        src_lengths,
+                        max_len,
+                    )
                 num_remaining_sent -= len(finalized_sents)
 
             assert num_remaining_sent >= 0
@@ -549,7 +563,6 @@ class SequenceGenerator(nn.Module):
             active_scores = torch.gather(cand_scores, dim=1, index=active_hypos)
 
             active_bbsz_idx = active_bbsz_idx.view(-1)
-            active_scores = active_scores.view(-1)
 
             # copy tokens and scores for active hypotheses
 
@@ -626,6 +639,124 @@ class SequenceGenerator(nn.Module):
         tensor = tensor.view(-1, beam_size, tensor.size(-1))
         tensor[mask] = tensor[mask][:, :1, :]
         return tensor.view(-1, tensor.size(-1))
+
+    def finalize_hypos_hpu(
+        self,
+        step: int,
+        bbsz_idx,
+        eos_scores,
+        tokens,
+        scores,
+        finalized: List[List[Dict[str, Tensor]]],
+        finished: List[bool],
+        beam_size: int,
+        attn: Optional[Tensor],
+        src_lengths,
+        max_len: int,
+    ):
+        """Finalize hypothesis, store finalized information in `finalized`, and change `finished` accordingly.
+        A sentence is finalized when {beam_size} finished items have been collected for it.
+
+        Returns number of sentences (not beam items) being finalized.
+        These will be removed from the batch and not processed further.
+        Args:
+            bbsz_idx (Tensor):
+        """
+        assert bbsz_idx.numel() == eos_scores.numel()
+
+        # clone relevant token and attention tensors.
+        # tokens is (batch * beam, max_len). So the index_select
+        # gets the newly EOS rows, then selects cols 1..{step + 2}
+        tokens_clone = tokens.index_select(0, bbsz_idx)[
+            :, 1 : step + 2
+        ]  # skip the first index, which is EOS
+
+        tokens_clone[:, step] = self.eos
+        attn_clone = (
+            attn.index_select(0, bbsz_idx)[:, :, 1 : step + 2]
+            if attn is not None
+            else None
+        )
+
+        # compute scores per token position
+        pos_scores = scores.index_select(0, bbsz_idx)[:, : step + 1]
+        pos_scores[:, step] = eos_scores
+        # convert from cumulative to per-position scores
+        pos_scores[:, 1:] = pos_scores[:, 1:] - pos_scores[:, :-1]
+
+        # normalize sentence-level scores
+        if self.normalize_scores:
+            eos_scores /= (step + 1) ** self.len_penalty
+
+        # cum_unfin records which sentences in the batch are finished.
+        # It helps match indexing between (a) the original sentences
+        # in the batch and (b) the current, possibly-reduced set of
+        # sentences.
+        cum_unfin: List[int] = []
+        prev = 0
+        for f in finished:
+            if f:
+                prev += 1
+            else:
+                cum_unfin.append(prev)
+
+        # The keys here are of the form "{sent}_{unfin_idx}", where
+        # "unfin_idx" is the index in the current (possibly reduced)
+        # list of sentences, and "sent" is the index in the original,
+        # unreduced batch
+        # set() is not supported in script export
+        sents_seen: Dict[str, Optional[Tensor]] = {}
+
+        # For every finished beam item
+        for i in range(bbsz_idx.size()[0]):
+            idx = bbsz_idx[i]
+            score = eos_scores[i]
+            # sentence index in the current (possibly reduced) batch
+            unfin_idx = idx // beam_size
+            # sentence index in the original (unreduced) batch
+            sent = unfin_idx + cum_unfin[unfin_idx]
+            # Cannot create dict for key type '(int, int)' in torchscript.
+            # The workaround is to cast int to string
+            seen = str(sent.item()) + "_" + str(unfin_idx.item())
+            if seen not in sents_seen:
+                sents_seen[seen] = None
+
+            if self.match_source_len and step > src_lengths[unfin_idx]:
+                score = torch.tensor(-math.inf).to(score)
+
+            # An input sentence (among those in a batch) is finished when
+            # beam_size hypotheses have been collected for it
+            if len(finalized[sent]) < beam_size:
+                if attn_clone is not None:
+                    # remove padding tokens from attn scores
+                    hypo_attn = attn_clone[i]
+                else:
+                    hypo_attn = torch.empty(0)
+
+                finalized[sent].append(
+                    {
+                        "tokens": tokens_clone[i],
+                        "score": score,
+                        "attention": hypo_attn,  # src_len x tgt_len
+                        "alignment": torch.empty(0),
+                        "positional_scores": pos_scores[i],
+                    }
+                )
+
+        newly_finished: List[int] = []
+
+        for seen in sents_seen.keys():
+            # check termination conditions for this sentence
+            sent: int = int(float(seen.split("_")[0]))
+            unfin_idx: int = int(float(seen.split("_")[1]))
+
+            if not finished[sent] and self.is_finished(
+                step, unfin_idx, max_len, len(finalized[sent]), beam_size
+            ):
+                finished[sent] = True
+                newly_finished.append(unfin_idx)
+
+        return newly_finished
 
     def finalize_hypos(
         self,

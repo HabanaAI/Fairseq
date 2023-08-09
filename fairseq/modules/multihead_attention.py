@@ -90,6 +90,7 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         xformers_blocksparse_blocksize: Optional[
             int
         ] = 16,  # This should be part of the config
+        use_torch_multi_head_attention=False,
     ):
         super().__init__(dictionary)
 
@@ -160,6 +161,7 @@ class MultiheadAttention(FairseqIncrementalDecoder):
 
         self.onnx_trace = False
         self.skip_embed_dim_check = False
+        self.use_torch_multi_head_attention = use_torch_multi_head_attention
         self.init_incremental_state()
 
     def prepare_for_onnx_export_(self):
@@ -500,6 +502,7 @@ class MultiheadAttention(FairseqIncrementalDecoder):
             need_weights = True
 
         is_tpu = query.device.type == "xla"
+        is_hpu = query.device.type == "hpu" and not self.use_torch_multi_head_attention
 
         tgt_len, bsz, embed_dim = query.size()
         src_len = tgt_len
@@ -517,6 +520,7 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         if (
             not self.onnx_trace
             and not is_tpu  # don't use PyTorch version on TPUs
+            and not is_hpu
             and incremental_state is None
             and not static_kv
             # A workaround for quantization to work. Otherwise JIT compilation

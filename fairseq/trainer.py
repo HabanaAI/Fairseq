@@ -1,4 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
+#
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -18,6 +20,8 @@ from typing import Any, Dict, List
 
 import torch
 from omegaconf import OmegaConf
+import habana_frameworks.torch.core as htcore
+import habana_frameworks.torch.utils.debug as htdebug
 
 from fairseq import checkpoint_utils, models, optim, utils
 from fairseq.dataclass.configs import FairseqConfig
@@ -58,11 +62,26 @@ class Trainer(object):
         # catalog shared parameters
         shared_params = _catalog_shared_params(model)
         self.tpu = cfg.common.tpu
+        self.hpu = cfg.common.hpu
+        self.use_autocast_on_gaudi = False
         self.cuda = torch.cuda.is_available() and not cfg.common.cpu and not self.tpu
         if self.cuda:
             self.device = torch.device("cuda")
         elif self.tpu:
             self.device = utils.get_tpu_device()
+        elif self.hpu:
+            os.environ["HABANA_PGM_LRU_MAX"] = "100000"
+            self.device = torch.device("hpu")
+
+            if self.cfg.common.hpu_lazy_mode:
+                os.environ["PT_HPU_LAZY_MODE"] = "1"
+            else:
+                if os.environ.get('PT_HPU_LAZY_MODE') == None:
+                    os.environ["PT_HPU_LAZY_MODE"] = "2"
+
+            if self.cfg.common.hpu_mixed_precision_mode == 'autocast':
+                self.use_autocast_on_gaudi=True
+
         else:
             self.device = torch.device("cpu")
 
@@ -103,7 +122,10 @@ class Trainer(object):
                 self._criterion = self._criterion.half()
                 self._model = self._model.half()
             elif cfg.common.bf16:
-                self._criterion = self._criterion.to(dtype=torch.bfloat16)
+                if self.hpu and self.cfg.model._name.startswith('transformer'):
+                    self._criterion = self._criterion.to(dtype=torch.float32)
+                else:
+                    self._criterion = self._criterion.to(dtype=torch.bfloat16)
                 self._model = self._model.to(dtype=torch.bfloat16)
             elif cfg.common.amp:
                 self._amp_retries = 0
@@ -172,6 +194,7 @@ class Trainer(object):
         self._start_time = time.time()
         self._previous_training_time = 0
         self._cumulative_training_time = None
+        self.start_epoch = 1
 
     def reinitialize(self):
         """Reinitialize the Trainer, typically after model params change."""
@@ -438,11 +461,17 @@ class Trainer(object):
         state_dict = utils.move_to_cpu(self.state_dict())
         state_dict["extra_state"].update(extra_state)
         if self.should_save_checkpoint_on_current_rank:
+            if self._model._get_name() == "Wav2Vec2Model" and self.device == torch.device('hpu'):
+                utils.hpu_wav2vec2_params_reshape(state_dict, True)
+                utils.hpu_wav2vec2_optimizer_reshape(state_dict['last_optimizer_state'], True)
             checkpoint_utils.torch_persistent_save(
                 state_dict,
                 filename,
                 async_write=self.cfg.checkpoint.write_checkpoints_asynchronously,
             )
+            if self._model._get_name() == "Wav2Vec2Model" and self.device == torch.device('hpu'):
+                utils.hpu_wav2vec2_params_reshape(state_dict, False)
+                utils.hpu_wav2vec2_optimizer_reshape(state_dict['last_optimizer_state'], False)
         logger.info(f"Finished saving checkpoint to {os.path.abspath(filename)}")
 
     def load_checkpoint(
@@ -478,6 +507,10 @@ class Trainer(object):
                 state = checkpoint_utils.load_checkpoint_to_cpu(
                     filename, load_on_all_ranks=load_on_all_ranks
                 )
+                
+                if self._model._get_name() == "Wav2Vec2Model" and self.device == torch.device('hpu'):
+                    state = utils.hpu_wav2vec2_params_reshape(state, False)
+
                 last_optim_state = state.get("last_optimizer_state", None)
 
                 # If doing zero_sharding, do not broadcast global optimizer
@@ -587,6 +620,9 @@ class Trainer(object):
         if last_optim_state is not None and not reset_optimizer:
             # rebuild optimizer after loading model, since params may have changed
             self._build_optimizer()
+            
+            if self._model._get_name() == "Wav2Vec2Model" and self.device == torch.device('hpu'):
+                last_optim_state = utils.hpu_wav2vec2_optimizer_reshape(last_optim_state, False)
 
             # only reload optimizer and lr_scheduler if they match
             last_optim = self._optim_history[-1]
@@ -609,6 +645,8 @@ class Trainer(object):
                 last_optim_state = self.optimizer.broadcast_global_state_dict(
                     last_optim_state
                 )
+            if self.hpu:
+                optimizer_overrides["correct_bias"] = True
 
             self.optimizer.load_state_dict(last_optim_state, optimizer_overrides)
 
@@ -617,6 +655,7 @@ class Trainer(object):
         if extra_state is not None:
             itr_state = extra_state["train_iterator"]
             epoch = itr_state["epoch"]
+            self.start_epoch = epoch
 
             if "previous_training_time" in extra_state:
                 self._previous_training_time = extra_state["previous_training_time"]
@@ -759,6 +798,11 @@ class Trainer(object):
             self.quantizer.begin_epoch(epoch)
 
         # task specific setup per epoch
+        if self.cfg.common.hpu_lazy_mode and self.cfg.common.hpu_graphs and not self.cfg.common.hpu_graphs_qa_mode:
+            if epoch == self.start_epoch:
+                self.get_model().capture_start()
+            if epoch == self.start_epoch + 1:
+                self.get_model().capture_end()
         self.task.begin_epoch(epoch, self.get_model())
 
         if self.tpu:
@@ -784,7 +828,10 @@ class Trainer(object):
         self.criterion.train()
         self.zero_grad()
 
-        metrics.log_start_time("train_wall", priority=800, round=0)
+        if self._model._get_name() == "Wav2Vec2Model":
+            metrics.log_start_time("train_wall", priority=800, round=2)
+        else:
+            metrics.log_start_time("train_wall", priority=800, round=0)
 
         # If EMA is enabled through store_ema=True
         # and task.uses_ema is True, pass the EMA model as a keyword
@@ -796,6 +843,8 @@ class Trainer(object):
         # forward and backward pass
         logging_outputs, sample_size, ooms = [], 0, 0
         for i, sample in enumerate(samples):  # delayed update loop
+            if self.cfg.common.hpu_lazy_mode and self.cfg.common.hpu_graphs:
+                self.model.set_iteration_count(i)
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             def maybe_no_sync():
@@ -828,8 +877,11 @@ class Trainer(object):
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
                         ignore_grad=is_dummy_batch,
+                        use_autocast_on_gaudi=self.use_autocast_on_gaudi,
                         **extra_kwargs,
                     )
+                    if self.hpu and self.cfg.common.hpu_lazy_mode:
+                        self._hpu_markstep()
                     del loss
 
                 logging_outputs.append(logging_output)
@@ -883,6 +935,10 @@ class Trainer(object):
 
         # gather logging outputs from all replicas
         if self._sync_stats():
+            if self.hpu:
+                async_logging = True
+            else:
+                async_logging = False
             train_time = self._local_cumulative_training_time()
             (
                 logging_outputs,
@@ -892,7 +948,7 @@ class Trainer(object):
                     total_train_time,
                 ),
             ) = self._aggregate_logging_outputs(
-                logging_outputs, sample_size, ooms, train_time, ignore=is_dummy_batch
+                logging_outputs, sample_size, ooms, train_time, ignore=is_dummy_batch, async_op=async_logging
             )
             self._cumulative_training_time = (
                 total_train_time / self.data_parallel_world_size
@@ -920,7 +976,14 @@ class Trainer(object):
                     if not self.cfg.optimization.use_bmuf or self._sync_stats()
                     else 1
                 )
-                self.optimizer.multiply_grads(numer / (sample_size or 1.0))
+                if not self.hpu:
+                    self.optimizer.multiply_grads(numer / (sample_size or 1.0))
+                else:
+                    if numer == 1:
+                       multiplying_factor = torch.where(torch.tensor(sample_size, device='hpu', dtype=torch.float32) > 0, torch.tensor((numer / sample_size), device='hpu', dtype=torch.float32), torch.tensor(numer, device='hpu', dtype=torch.float32))
+                    else:
+                       multiplying_factor = torch.where(sample_size > 0, (numer / sample_size).detach().clone().to(torch.float32) , torch.tensor(numer, device='hpu', dtype=torch.float32))
+                    self.optimizer.multiply_grads(multiplying_factor)
                 # Note: (sample_size or 1.0) handles the case of a zero gradient, in a
                 # way that avoids CPU/device transfers in case sample_size is a GPU or
                 # TPU object. The assumption is that the gradient itself is also 0.
@@ -931,7 +994,7 @@ class Trainer(object):
 
             # check that grad norms are consistent across workers
             # on tpu check tensor is slow
-            if not self.tpu:
+            if not (self.tpu or self.hpu):
                 if (
                     not self.cfg.optimization.use_bmuf
                     and self.cfg.distributed_training.ddp_backend != "slowmo"
@@ -949,7 +1012,8 @@ class Trainer(object):
             with torch.autograd.profiler.record_function("optimizer"):
                 # take an optimization step
                 self.task.optimizer_step(
-                    self.optimizer, model=self.model, update_num=self.get_num_updates()
+                    self.optimizer,
+                    model=self.model, update_num=self.get_num_updates()
                 )
                 if self.cfg.common.amp and overflow:
                     if self._amp_retries == self.cfg.common.amp_batch_retries:
@@ -1053,6 +1117,10 @@ class Trainer(object):
                 # slow down training and may indicate opportunities for
                 # optimization
                 self._check_xla_compilation()
+            elif self.hpu:
+                self._hpu_markstep()
+                if self.get_num_updates() % self.cfg.common.log_interval == 0:
+                    logging_output = self._reduce_and_log_stats(logging_outputs, sample_size, grad_norm)
             else:
                 if self.cuda and self.cuda_env is not None:
                     # log minimum free memory over the iteration
@@ -1119,7 +1187,7 @@ class Trainer(object):
 
             try:
                 _loss, sample_size, logging_output = self.task.valid_step(
-                    sample, self.model, self.criterion, **extra_kwargs
+                    sample, self.model, self.criterion, use_autocast_on_gaudi=self.use_autocast_on_gaudi, **extra_kwargs
                 )
             except RuntimeError as e:
                 if "out of memory" in str(e):
@@ -1251,10 +1319,14 @@ class Trainer(object):
 
     def clip_grad_norm(self, clip_norm):
         def agg_norm_fn(total_norm):
-            total_norm = total_norm.cuda().float() ** 2
-            total_norm = distributed_utils.all_reduce(
-                total_norm, group=self.data_parallel_process_group
-            )
+            if utils.is_hpu_tensor(total_norm):
+                total_norm = total_norm.float() ** 2
+            else:
+                total_norm = total_norm.cuda().float() ** 2
+            if self.data_parallel_world_size > 1:
+                total_norm = distributed_utils.all_reduce(
+                    total_norm, group=self.data_parallel_process_group
+                )
             return total_norm**0.5
 
         should_agg_norm = self.is_fsdp and (
@@ -1328,6 +1400,8 @@ class Trainer(object):
         elif self.tpu and is_dummy:
             # the dummy batch may not be on the appropriate device
             sample = utils.move_to_cuda(sample, device=self.device)
+        elif self.cfg.common.hpu:
+            sample = utils.move_to_habana(sample,device=self.device)
 
         if not self.cfg.common.on_cpu_convert_precision:
             sample = self._fp_convert_sample(sample)
@@ -1370,10 +1444,11 @@ class Trainer(object):
         logging_outputs: List[Dict[str, Any]],
         *extra_stats_to_sum,
         ignore=False,
+        async_op=False,
     ):
         if self.task.__class__.logging_outputs_can_be_summed(self.get_criterion()):
             return self._fast_stat_sync_sum(
-                logging_outputs, *extra_stats_to_sum, ignore=ignore
+                logging_outputs, *extra_stats_to_sum, ignore=ignore, async_op=async_op
             )
         else:
             return self._all_gather_list_sync(
@@ -1413,6 +1488,7 @@ class Trainer(object):
         logging_outputs: List[Dict[str, Any]],
         *extra_stats_to_sum,
         ignore=False,
+        async_op=False,
     ):
         """
         Sync logging outputs across workers. fast_stat_sync_sum is
@@ -1436,7 +1512,7 @@ class Trainer(object):
             log_keys = None
 
         data = distributed_utils.all_reduce_dict(
-            data, device=self.device, group=self.data_parallel_process_group
+            data, device=self.device, group=self.data_parallel_process_group,async_op=async_op
         )
 
         extra_stats_to_sum = [
@@ -1556,6 +1632,8 @@ class Trainer(object):
 
             return xla_device_to_cpu(data)
 
+    def _hpu_markstep(self, data=None):
+        htcore.mark_step()
 
 def _catalog_shared_params(module, memo=None, prefix=""):
     if memo is None:
