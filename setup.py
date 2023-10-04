@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -9,7 +10,6 @@ import subprocess
 import sys
 
 from setuptools import Extension, find_packages, setup
-from torch.utils import cpp_extension
 
 if sys.version_info < (3, 6):
     sys.exit("Sorry, Python >= 3.6 is required for fairseq.")
@@ -79,57 +79,60 @@ extensions = [
     ),
 ]
 
+cmdclass = dict()
 
-extensions.extend(
-    [
-        cpp_extension.CppExtension(
-            "fairseq.libbase",
-            sources=[
-                "fairseq/clib/libbase/balanced_assignment.cpp",
-            ],
-        ),
-        cpp_extension.CppExtension(
-            "fairseq.libnat",
-            sources=[
-                "fairseq/clib/libnat/edit_dist.cpp",
-            ],
-        ),
-        cpp_extension.CppExtension(
-            "alignment_train_cpu_binding",
-            sources=[
-                "examples/operators/alignment_train_cpu.cpp",
-            ],
-        ),
-    ]
-)
-if "CUDA_HOME" in os.environ:
+try:
+    # torch is not available when generating docs
+    from torch.utils import cpp_extension
+
     extensions.extend(
         [
             cpp_extension.CppExtension(
-                "fairseq.libnat_cuda",
+                "fairseq.libbase",
                 sources=[
-                    "fairseq/clib/libnat_cuda/edit_dist.cu",
-                    "fairseq/clib/libnat_cuda/binding.cpp",
+                    "fairseq/clib/libbase/balanced_assignment.cpp",
                 ],
             ),
             cpp_extension.CppExtension(
-                "fairseq.ngram_repeat_block_cuda",
+                "fairseq.libnat",
                 sources=[
-                    "fairseq/clib/cuda/ngram_repeat_block_cuda.cpp",
-                    "fairseq/clib/cuda/ngram_repeat_block_cuda_kernel.cu",
-                ],
-            ),
-            cpp_extension.CppExtension(
-                "alignment_train_cuda_binding",
-                sources=[
-                    "examples/operators/alignment_train_kernel.cu",
-                    "examples/operators/alignment_train_cuda.cpp",
+                    "fairseq/clib/libnat/edit_dist.cpp",
                 ],
             ),
         ]
     )
+    if "CUDA_HOME" in os.environ:
+        extensions.extend(
+            [
+                cpp_extension.CppExtension(
+                    "fairseq.libnat_cuda",
+                    sources=[
+                        "fairseq/clib/libnat_cuda/edit_dist.cu",
+                        "fairseq/clib/libnat_cuda/binding.cpp",
+                    ],
+                ),
+                cpp_extension.CppExtension(
+                    "fairseq.ngram_repeat_block_cuda",
+                    sources=[
+                        "fairseq/clib/cuda/ngram_repeat_block_cuda.cpp",
+                        "fairseq/clib/cuda/ngram_repeat_block_cuda_kernel.cu",
+                    ],
+                ),
+                cpp_extension.CppExtension(
+                    "alignment_train_cuda_binding",
+                    sources=[
+                        "examples/operators/alignment_train_kernel.cu",
+                        "examples/operators/alignment_train_cuda.cpp",
+                    ],
+                ),
+            ]
+        )
 
-cmdclass = {"build_ext": cpp_extension.BuildExtension}
+    cmdclass["build_ext"] = cpp_extension.BuildExtension
+
+except ImportError:
+    pass
+
 
 if "READTHEDOCS" in os.environ:
     # don't build extensions when generating docs
@@ -181,13 +184,14 @@ def do_setup(package_data):
             "cython",
             "hydra-core>=1.0.7,<1.1",
             "omegaconf<2.1",
-            "numpy>=1.21.3",
+            "numpy>=1.22.2",
             "regex",
-            "sacrebleu>=1.4.12",
+            "sacrebleu>=1.4.12, <2.0.0",
             "torch>=1.10",
             "tqdm",
             "bitarray",
-            "torchaudio>=0.8.0",
+            "tensorboardX==2.6",
+            "soundfile==0.12.1",
         ],
         extras_require={
             "dev": ["flake8", "pytest", "black==22.3.0"],

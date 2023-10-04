@@ -1,11 +1,13 @@
 #!/usr/bin/env python3 -u
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
 import logging
 import os
+import sys
 
 import hydra
 import torch
@@ -73,12 +75,35 @@ def _hydra_main(cfg: FairseqConfig, **kwargs) -> float:
 
     return best_val
 
+def remove_local_rank(argv, unknown_args):
+    for unknown_arg in unknown_args:
+        if str(unknown_arg).startswith('--local_rank'):
+            index = argv.index(unknown_arg)
+            argv.pop(index)
+            while len(argv) > index and not (str(argv[index]).startswith('--') or  str(argv[index]).startswith('-')) and argv[index] in unknown_args:
+                argv.pop(index)
+
+    return argv
 
 def cli_main():
     try:
-        from hydra._internal.utils import get_args
+        from hydra._internal.utils import get_args_parser
 
-        cfg_name = get_args().config_name or "config"
+        parser = get_args_parser()
+        _, unknown_args = parser.parse_known_args(None, None)
+        if unknown_args:
+            parser.add_argument('--local_rank', type=int, default=0, help='local rank')
+        args = parser.parse_args(None)
+
+        cfg_name = args.config_name or "config"
+        local_rank = '-1'
+        if os.getenv('LOCAL_RANK', '-1') != '-1':
+            local_rank = os.environ['LOCAL_RANK']
+        if unknown_args:
+            sys.argv = remove_local_rank(sys.argv, unknown_args)
+            local_rank = str(args.local_rank)
+        if local_rank != '-1':
+            sys.argv.insert(1, 'distributed_training.device_id='+local_rank)
     except:
         logger.warning("Failed to get config name from hydra args")
         cfg_name = "config"

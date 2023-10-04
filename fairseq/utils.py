@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -137,6 +138,11 @@ def move_to_tpu(sample):
 
     return apply_to_sample(_move_to_tpu, sample)
 
+def move_to_habana(sample, device):
+    def _move_to_habana(tensor):
+        return tensor.to(device, non_blocking=True)
+
+    return apply_to_sample(_move_to_habana, sample)
 
 def get_incremental_state(
     module: "MultiheadAttention",
@@ -352,10 +358,10 @@ def clip_grad_norm_(params, max_norm, aggregate_norm_fn=None) -> torch.Tensor:
         params = [params]
     params = list(params)
     grads = [
-        p.grad.detach() for p in params if grad_exists(p) and not hasattr(p, "expert")
+        p.grad for p in params if grad_exists(p) and not hasattr(p, "expert")
     ]
     expert_grads = [
-        p.grad.detach() for p in params if grad_exists(p) and hasattr(p, "expert")
+        p.grad for p in params if grad_exists(p) and hasattr(p, "expert")
     ]
 
     if len(grads) == 0:
@@ -376,7 +382,7 @@ def clip_grad_norm_(params, max_norm, aggregate_norm_fn=None) -> torch.Tensor:
                     "you may get better performance by installing NVIDIA's apex library"
                 )
                 device = torch.cuda.current_device()
-            elif grads[0].device.type == "xla":
+            elif grads[0].device.type == "xla" or grads[0].device.type == "hpu":
                 device = grads[0].device
             else:
                 device = torch.device("cpu")
@@ -514,6 +520,8 @@ def import_user_module(args):
 def softmax(x, dim: int, onnx_trace: bool = False):
     if onnx_trace:
         return F.softmax(x.float(), dim=dim)
+    elif x.device.type == "hpu":
+        return F.softmax(x, dim=dim)
     else:
         return F.softmax(x, dim=dim, dtype=torch.float32)
 
@@ -732,9 +740,39 @@ def tpu_data_loader(itr):
 def is_xla_tensor(tensor):
     return torch.is_tensor(tensor) and tensor.device.type == "xla"
 
+def is_hpu_tensor(tensor):
+    return torch.is_tensor(tensor) and tensor.device.type == "hpu"
+
+def hpu_wav2vec2_params_reshape(state, conv2d_to_1d):
+    # W/A of load/save checkpoint for SW-85311
+    conv1d_weight_shapes = [(512, 1, 10), (512, 512, 3), (512, 512, 2)]
+    conv2d_weight_shapes = [(512, 1, 1, 10), (512, 512, 1, 3), (512, 512, 1, 2)]
+    conv_param_name = ["feature_extractor.conv_layers.{}.0.weight".format(i) for i in range(0, 7)]
+    for name, param in state['model'].items():
+        if name in conv_param_name:
+            if conv2d_to_1d and param.data.shape in conv2d_weight_shapes:
+                param.data = param.data.squeeze(2)
+            elif param.data.shape in conv1d_weight_shapes:
+                param.data = param.data.unsqueeze(2)
+    return state
+
+def hpu_wav2vec2_optimizer_reshape(last_optim_state, conv2d_to_1d):
+    # W/A of load/save checkpoint for SW-85311
+    conv1d_weight_shapes = [(512, 1, 10), (512, 512, 3), (512, 512, 2)]
+    conv2d_weight_shapes = [(512, 1, 1, 10), (512, 512, 1, 3), (512, 512, 1, 2)]
+    for key, states in last_optim_state['state'].items():
+        for k, buf in states.items():
+            if k == 'exp_avg' or k == 'exp_avg_sq':
+                if conv2d_to_1d:
+                    if buf.shape in conv2d_weight_shapes:
+                        last_optim_state['state'][key][k] = last_optim_state['state'][key][k].squeeze(2)
+                else:
+                    if buf.shape in conv1d_weight_shapes:
+                        last_optim_state['state'][key][k] = last_optim_state['state'][key][k].unsqueeze(2)
+    return last_optim_state
 
 def index_put(tensor, indices, value):
-    if is_xla_tensor(tensor):
+    if is_xla_tensor(tensor) or is_hpu_tensor(tensor):
         for _ in range(indices.dim(), tensor.dim()):
             indices = indices.unsqueeze(-1)
         if indices.size(-1) < tensor.size(-1):

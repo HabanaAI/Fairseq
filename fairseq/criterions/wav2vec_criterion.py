@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -13,7 +14,7 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 from fairseq.dataclass import FairseqDataclass
 from fairseq.logging.meters import safe_round
-from fairseq.utils import is_xla_tensor
+from fairseq.utils import is_hpu_tensor, is_xla_tensor
 
 
 @dataclass
@@ -54,6 +55,7 @@ class Wav2vecCriterion(FairseqCriterion):
         logits = model.get_logits(net_output).float()
         target = model.get_targets(sample, net_output)
         self.xla = is_xla_tensor(logits)
+        self.hpu = is_hpu_tensor(logits)
 
         # XXX: handle weights on xla.
         weights = None
@@ -64,7 +66,7 @@ class Wav2vecCriterion(FairseqCriterion):
 
         losses = []
 
-        reduction = "none" if ((not reduce) or self.xla) else "sum"
+        reduction = "none" if ((not reduce) or self.xla or self.hpu) else "sum"
         if self.infonce:
             loss = F.cross_entropy(logits, target, reduction=reduction)
         else:
@@ -72,7 +74,7 @@ class Wav2vecCriterion(FairseqCriterion):
                 logits, target.float(), weights, reduction=reduction
             )
 
-        if self.xla:
+        if self.xla or self.hpu:
             # tpu-comment: since dynamic shapes lead to recompilations on xla,
             # we don't shrink tensors using mask_indices.
             # Instead, we use mask indices to adjust loss.
@@ -108,7 +110,7 @@ class Wav2vecCriterion(FairseqCriterion):
                     losses.append(p)
 
         logging_output = {
-            "loss": loss.item() if (reduce and not self.xla) else loss.detach(),
+            "loss": loss.item() if (reduce and not (self.xla or self.hpu)) else loss.detach(),
             "ntokens": sample_size,
             "nsentences": sample["id"].numel(),
             "sample_size": sample_size,
@@ -131,13 +133,13 @@ class Wav2vecCriterion(FairseqCriterion):
                     logging_output["target"] = original_target.cpu().numpy()
             elif lk in net_output:
                 value = net_output[lk]
-                if not is_xla_tensor(value):
+                if not (is_xla_tensor(value) or is_hpu_tensor(value)):
                     value = float(value)
                 logging_output[lk] = value
 
         if len(losses) > 1:
             for i, l in enumerate(losses):
-                logging_output[f"loss_{i}"] = l.item() if not self.xla else l.detach()
+                logging_output[f"loss_{i}"] = l.item() if not (self.xla or self.hpu) else l.detach()
 
         if self.infonce:
             with torch.no_grad():
@@ -148,7 +150,7 @@ class Wav2vecCriterion(FairseqCriterion):
                     assert logits.dim() > 1, logits.shape
                     max = logits.argmax(-1) == 0
                     min = logits.argmin(-1) == 0
-                    if is_xla_tensor(logits):
+                    if is_xla_tensor(logits) or is_hpu_tensor(logits):
                         max, min = max * mi, min * mi
                         both = max & min
                         corr = max.long().sum() - both.long().sum()
@@ -191,7 +193,7 @@ class Wav2vecCriterion(FairseqCriterion):
             metrics.log_derived(
                 "accuracy",
                 lambda meters: safe_round(
-                    meters["_correct"].sum / meters["_total"].sum, 5
+                    meters["_correct"].sum.float() / meters["_total"].sum, 5
                 )
                 if meters["_total"].sum > 0
                 else float("nan"),
@@ -227,4 +229,4 @@ class Wav2vecCriterion(FairseqCriterion):
         """
         # XXX: Gather based reduction not implemented for xla yet.
         # So we fall to sum based reduction for xla.
-        return self.xla
+        return self.xla or self.hpu
