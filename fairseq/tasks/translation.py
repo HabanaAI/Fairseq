@@ -58,6 +58,7 @@ def load_langpair_dataset(
     shuffle=True,
     pad_to_multiple=1,
     prepend_bos_src=None,
+    calculate_optimal_bucket=False,
 ):
     def split_exists(split, src, tgt, lang, data_path):
         filename = os.path.join(data_path, "{}.{}-{}.{}".format(split, src, tgt, lang))
@@ -167,6 +168,7 @@ def load_langpair_dataset(
         num_buckets=num_buckets,
         shuffle=shuffle,
         pad_to_multiple=pad_to_multiple,
+        calculate_optimal_bucket=calculate_optimal_bucket,
     )
 
 
@@ -222,11 +224,16 @@ class TranslationConfig(FairseqDataclass):
             "N buckets and pad accordingly; this is useful on TPUs to minimize the number of compilations"
         },
     )
+    calculate_optimal_bucket: bool = field(
+        default=False, metadata={"help": "If true, calculate the optimal bucket instead of using stored one"}
+    )
     train_subset: str = II("dataset.train_subset")
     dataset_impl: Optional[ChoiceEnum(get_available_dataset_impl())] = II(
         "dataset.dataset_impl"
     )
     required_seq_len_multiple: int = II("dataset.required_seq_len_multiple")
+    hpu: bool = II("common.hpu")
+    hpu_lazy_mode: bool = II("common.hpu_lazy_mode")
 
     # options for reporting BLEU during validation
     eval_bleu: bool = field(
@@ -335,6 +342,12 @@ class TranslationTask(FairseqTask):
         # infer langcode
         src, tgt = self.cfg.source_lang, self.cfg.target_lang
 
+        #Setting fixed buckets to avoid dynamic shapes
+        if split=='train':
+            num_buckets= self.cfg.num_batch_buckets
+        else:
+            num_buckets= 3
+
         self.datasets[split] = load_langpair_dataset(
             data_path,
             split,
@@ -351,9 +364,10 @@ class TranslationTask(FairseqTask):
             max_target_positions=self.cfg.max_target_positions,
             load_alignments=self.cfg.load_alignments,
             truncate_source=self.cfg.truncate_source,
-            num_buckets=self.cfg.num_batch_buckets,
+            num_buckets=num_buckets,
             shuffle=(split != "test"),
             pad_to_multiple=self.cfg.required_seq_len_multiple,
+            calculate_optimal_bucket=self.cfg.calculate_optimal_bucket,
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):
@@ -379,8 +393,8 @@ class TranslationTask(FairseqTask):
             )
         return model
 
-    def valid_step(self, sample, model, criterion):
-        loss, sample_size, logging_output = super().valid_step(sample, model, criterion)
+    def valid_step(self, sample, model, criterion, use_autocast_on_gaudi):
+        loss, sample_size, logging_output = super().valid_step(sample, model, criterion, use_autocast_on_gaudi)
         if self.cfg.eval_bleu:
             bleu = self._inference_with_bleu(self.sequence_generator, sample, model)
             logging_output["_bleu_sys_len"] = bleu.sys_len
@@ -479,6 +493,11 @@ class TranslationTask(FairseqTask):
             return s
 
         gen_out = self.inference_step(generator, [model], sample, prefix_tokens=None)
+
+        if self.cfg.hpu and self.cfg.hpu_lazy_mode:
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
+
         hyps, refs = [], []
         for i in range(len(gen_out)):
             hyps.append(decode(gen_out[i][0]["tokens"]))

@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -6,7 +7,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from fairseq import utils
 
 class GumbelVectorQuantizer(nn.Module):
     def __init__(
@@ -190,9 +191,16 @@ class GumbelVectorQuantizer(nn.Module):
                 .detach()
             )
 
-        x = x.unsqueeze(-1) * vars
-        x = x.view(bsz * tsz, self.groups, self.num_vars, -1)
-        x = x.sum(-2)
+        if utils.is_hpu_tensor(x) and x.dim() == 2:
+            x = x.view(bsz * tsz, self.groups,self.num_vars)
+            vars = vars.view(self.groups, self.num_vars, -1)
+            x = torch.permute(x, (1,0,2))
+            x = x @ vars
+            x = torch.permute(x, (1,0,2)).contiguous()
+        else:
+            x = x.unsqueeze(-1) * vars
+            x = x.view(bsz * tsz, self.groups, self.num_vars, -1)
+            x = x.sum(-2)
         x = x.view(bsz, tsz, -1)
 
         if not self.time_first:
