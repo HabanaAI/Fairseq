@@ -325,8 +325,12 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         x = x.transpose(0, 1)
 
         self_attn_padding_mask: Optional[Tensor] = None
-        if self.cross_self_attention or prev_output_tokens.eq(self.padding_idx).any():
-            self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
+        decoder_padding_mask = prev_output_tokens.eq(self.padding_idx)
+        if x.device.type == "hpu":
+            self_attn_padding_mask = decoder_padding_mask
+        else:
+            if self.cross_self_attention or prev_output_tokens.eq(self.padding_idx).any():
+                self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
 
         # decoder layers
         attn: Optional[Tensor] = None

@@ -63,10 +63,20 @@ def _main(cfg: DictConfig, output_file):
         datefmt="%Y-%m-%d %H:%M:%S",
         level=os.environ.get("LOGLEVEL", "INFO").upper(),
         stream=output_file,
+        force=True,
     )
     logger = logging.getLogger("fairseq_cli.generate")
+    logger.setLevel(logging.INFO)
 
     utils.import_user_module(cfg.common)
+    # Disable hpu dynamic shape
+    if cfg.common.hpu:
+        try:
+            if cfg.common.hpu_disable_dynamic_shape:
+                import habana_frameworks.torch.hpu as ht
+                ht.disable_dynamic_shape()
+        except ImportError:
+            logger.info("habana_frameworks could Not be loaded")
 
     if cfg.dataset.max_tokens is None and cfg.dataset.batch_size is None:
         cfg.dataset.max_tokens = 12000
@@ -123,6 +133,13 @@ def _main(cfg: DictConfig, output_file):
     else:
         lms = [None]
 
+    if cfg.common.hpu:
+        device = torch.device("hpu")
+        try:
+            import habana_frameworks.torch.core as htcore
+        except ImportError:
+            assert False, "Could Not import habana_frameworks.torch.core"
+
     # Optimize ensemble for generation
     for model in chain(models, lms):
         if model is None:
@@ -131,6 +148,10 @@ def _main(cfg: DictConfig, output_file):
             model.half()
         if use_cuda and not cfg.distributed_training.pipeline_model_parallel:
             model.cuda()
+        if cfg.common.hpu and cfg.common.bf16:
+            model=model.to(device=device, dtype=torch.bfloat16)
+        elif cfg.common.hpu:
+            model=model.to(device=device)
         model.prepare_for_inference_(cfg)
 
     # Load alignment dictionary for unknown word replacement
@@ -186,6 +207,7 @@ def _main(cfg: DictConfig, output_file):
     wps_meter = TimeMeter()
     for sample in progress:
         sample = utils.move_to_cuda(sample) if use_cuda else sample
+        sample = utils.move_to_habana(sample,device=device) if cfg.common.hpu else sample
         if "net_input" not in sample:
             continue
 
@@ -363,6 +385,7 @@ def _main(cfg: DictConfig, output_file):
 
         wps_meter.update(num_generated_tokens)
         progress.log({"wps": round(wps_meter.avg)})
+        logger.info({"wps": round(wps_meter.avg)})
         num_sentences += (
             sample["nsentences"] if "nsentences" in sample else sample["id"].numel()
         )

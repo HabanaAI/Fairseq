@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -145,6 +146,14 @@ class CommonConfig(FairseqDataclass):
     )
     cpu: bool = field(default=False, metadata={"help": "use CPU instead of CUDA"})
     tpu: bool = field(default=False, metadata={"help": "use TPU instead of CUDA"})
+    hpu: bool = field(default=False, metadata={"help": "use HPU for training the model"})
+    hpu_torch_compile: bool = field(default=False, metadata={"help": "use PT20 torch.compile"})
+    hpu_lazy_mode: bool = field(default=True, metadata={"help": "use HPU Lazy mode for training the model"})
+    hpu_graphs: bool = field(default=False, metadata={"help": "use HPU graphs for training the model"})
+    hpu_graphs_qa_mode: bool = field(default=False, metadata={"help": "use HPU graphs for perf test"})
+    hpu_mixed_precision_mode: Optional[str] = field(
+        default=None, metadata={"help":" mixed precision training on Gaudi, available modes are: 'autocast'"})
+    hpu_disable_dynamic_shape: bool = field(default=True, metadata={"help": "enable/disable dynamic shape for HPU."})
     bf16: bool = field(default=False, metadata={"help": "use bfloat16; implies --tpu"})
     memory_efficient_bf16: bool = field(
         default=False,
@@ -269,6 +278,7 @@ class DistributedTrainingConfig(FairseqDataclass):
     distributed_rank: Optional[int] = field(
         default=0, metadata={"help": "rank of the current worker"}
     )
+    hpu: bool = II("common.hpu")
     distributed_backend: str = field(
         default="nccl", metadata={"help": "distributed backend"}
     )
@@ -438,6 +448,7 @@ class DistributedTrainingConfig(FairseqDataclass):
     fp16: bool = II("common.fp16")
     memory_efficient_fp16: bool = II("common.memory_efficient_fp16")
     tpu: bool = II("common.tpu")
+    hpu: bool = II("common.hpu")
     # configuration for --ddp-backend=fully_sharded
     no_reshard_after_forward: bool = field(
         default=False,
@@ -565,7 +576,7 @@ class DatasetConfig(FairseqDataclass):
         default=0, metadata={"help": "id of the shard to generate (id < num_shards)"}
     )
     grouped_shuffling: bool = field(
-        default=False,
+        default=True,
         metadata={
             "help": "shuffle batches in groups of num_shards to enable similar sequence lengths on each GPU worker when batches are sorted by length",
         },
