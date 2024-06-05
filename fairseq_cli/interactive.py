@@ -114,6 +114,18 @@ def main(cfg: FairseqConfig):
 
     utils.import_user_module(cfg.common)
 
+    os.environ["ENABLE_EXPERIMENTAL_FLAGS"]="1"
+    os.environ["SPILL_PERSISTENT_TENSORS"]="0"
+
+    if cfg.common.hpu:
+        device = torch.device("hpu")
+        try:
+            import habana_frameworks.torch.hpu as ht
+        except ImportError:
+            assert False, "Could Not import habana_frameworks.torch.core"
+        if cfg.common.hpu_disable_dynamic_shape:
+            ht.disable_dynamic_shape()
+
     if cfg.interactive.buffer_size < 1:
         cfg.interactive.buffer_size = 1
     if cfg.dataset.max_tokens is None and cfg.dataset.batch_size is None:
@@ -163,6 +175,10 @@ def main(cfg: FairseqConfig):
             model.half()
         if use_cuda and not cfg.distributed_training.pipeline_model_parallel:
             model.cuda()
+        if cfg.common.hpu and cfg.common.bf16:
+            model=model.to(device=device, dtype=torch.bfloat16)
+        elif cfg.common.hpu:
+            model=model.to(device=device)
         model.prepare_for_inference_(cfg)
 
     # Initialize generator
@@ -223,6 +239,11 @@ def main(cfg: FairseqConfig):
                     "src_lengths": src_lengths,
                 },
             }
+            if cfg.common.hpu:
+                sample = utils.move_to_habana(sample,device=device)
+                if constraints is not None:
+                    constraints = constraints.to(device)
+
             translate_start_time = time.time()
             translations = task.inference_step(
                 generator, models, sample, constraints=constraints

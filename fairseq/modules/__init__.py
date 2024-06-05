@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -18,7 +19,7 @@ from .ema_module import EMAModuleConfig, EMAModule
 from .fairseq_dropout import FairseqDropout
 from .fp32_batch_norm import Fp32BatchNorm
 from .fp32_group_norm import Fp32GroupNorm
-from .fp32_instance_norm import Fp32InstanceNorm
+from .fp32_instance_norm import Fp32InstanceNorm, Fp32InstanceNorm2d
 from .gelu import gelu, gelu_accurate
 from .grad_multiply import GradMultiply
 from .gumbel_vector_quantizer import GumbelVectorQuantizer
@@ -71,6 +72,7 @@ __all__ = [
     "Fp32GroupNorm",
     "Fp32LayerNorm",
     "Fp32InstanceNorm",
+    "Fp32InstanceNorm2d",
     "gelu",
     "gelu_accurate",
     "GradMultiply",

@@ -14,7 +14,8 @@ def pad_to_multiple(x, multiple, dim=-1, value=0):
     tsz = x.size(dim)
     m = tsz / multiple
     remainder = math.ceil(m) * multiple - tsz
-    if m.is_integer():
+    # Work around until https://github.com/pytorch/pytorch/pull/114703 gets merged
+    if isinstance(m, int):
         return x, 0
     pad_offset = (0,) * (-1 - dim) * 2
 

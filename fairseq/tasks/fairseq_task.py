@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -488,7 +489,7 @@ class FairseqTask(object):
         )
 
     def train_step(
-        self, sample, model, criterion, optimizer, update_num, ignore_grad=False
+        self, sample, model, criterion, optimizer, update_num, ignore_grad=False, use_autocast_on_gaudi=False
     ):
         """
         Do forward and backward, and return the loss as computed by *criterion*
@@ -513,7 +514,8 @@ class FairseqTask(object):
         model.train()
         model.set_num_updates(update_num)
         with torch.autograd.profiler.record_function("forward"):
-            with torch.cuda.amp.autocast(enabled=(isinstance(optimizer, AMPOptimizer))):
+            with torch.cuda.amp.autocast(enabled=(isinstance(optimizer, AMPOptimizer))), \
+                torch.autocast(device_type='hpu', dtype=torch.bfloat16, enabled=use_autocast_on_gaudi):
                 loss, sample_size, logging_output = criterion(model, sample)
         if ignore_grad:
             loss *= 0
@@ -521,9 +523,9 @@ class FairseqTask(object):
             optimizer.backward(loss)
         return loss, sample_size, logging_output
 
-    def valid_step(self, sample, model, criterion):
+    def valid_step(self, sample, model, criterion, use_autocast_on_gaudi):
         model.eval()
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type='hpu', dtype=torch.bfloat16, enabled=use_autocast_on_gaudi):
             loss, sample_size, logging_output = criterion(model, sample)
         return loss, sample_size, logging_output
 
