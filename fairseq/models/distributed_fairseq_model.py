@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (C) 2022 Habana Labs, Ltd. an Intel Company.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -57,15 +58,19 @@ def DistributedFairseqModel(args, model, process_group, device):
         # forward missing getattr and state_dict/load_state_dict to orig model
         wrapped_model = ModuleProxyWrapper(wrapped_model)
     elif args.ddp_backend in {"c10d", "pytorch_ddp"}:
+        device_ids = [args.device_id] if not args.hpu else None
+        output_device = args.device_id if not args.hpu else None
+        bucket_cap_mb = args.bucket_cap_mb if not args.hpu else 300
+        gradient_as_bucket_view = args.gradient_as_bucket_view if not args.hpu else True
         wrapped_model = DistributedDataParallel(
             module=model.to(device),
-            device_ids=[args.device_id],
-            output_device=args.device_id,
+            device_ids=device_ids,
+            output_device=output_device,
             broadcast_buffers=args.broadcast_buffers,
-            bucket_cap_mb=args.bucket_cap_mb,
+            bucket_cap_mb=bucket_cap_mb,
             process_group=process_group,
             find_unused_parameters=args.find_unused_parameters,
-            gradient_as_bucket_view=args.gradient_as_bucket_view,
+            gradient_as_bucket_view=gradient_as_bucket_view,
         )
         if args.ddp_comm_hook == "fp16":
             logger.info("enable fp16 communication hook in DDP")

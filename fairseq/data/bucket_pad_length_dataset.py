@@ -31,6 +31,7 @@ class BucketPadLengthDataset(BaseWrapperDataset):
         pad_idx,
         left_pad,
         tensor_key=None,
+        calculate_bucket=False,
     ):
         super().__init__(dataset)
         self.pad_idx = pad_idx
@@ -38,6 +39,24 @@ class BucketPadLengthDataset(BaseWrapperDataset):
 
         assert num_buckets > 0
         self.buckets = get_buckets(sizes, num_buckets)
+        if num_buckets == 10:
+            self.buckets = (13, 20, 23, 30, 35, 41, 51, 64, 96, 256)
+        elif num_buckets == 3:
+            self.buckets = (16, 32, 256)
+        else:
+            from fairseq.data.bucket_utils import get_optimal_bucket_ip, get_stored_optimal_bucket, store_optimal_bucket
+            optimal_bucket = get_stored_optimal_bucket(sizes, num_buckets)
+            if calculate_bucket or not optimal_bucket:
+                optimal_bucket = get_optimal_bucket_ip(sizes, num_buckets)
+                if optimal_bucket: # got optimal bucket from LP
+                    # only dump the optimal bucket info to file in rank 0
+                    import fairseq.distributed.utils as dist_utils
+                    global_rank = dist_utils.get_global_rank()
+                    if global_rank == 0:
+                        store_optimal_bucket(sizes, num_buckets, optimal_bucket)
+                else:  # fall back to fairseq to get the bucket
+                    optimal_bucket = get_buckets(sizes, num_buckets)
+            self.buckets = optimal_bucket
         self._bucketed_sizes = get_bucketed_sizes(sizes, self.buckets)
         self._tensor_key = tensor_key
 

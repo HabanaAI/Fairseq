@@ -197,8 +197,16 @@ def parse_args_and_arch(
         args.bf16 = True
     args.tpu = getattr(args, "tpu", False)
     args.bf16 = getattr(args, "bf16", False)
+    args.hpu = getattr(args, "hpu", False)
+    args.hpu_torch_compile = getattr(args, "hpu_torch_compile", False)
+
+    if args.hpu_torch_compile:
+        args.hpu_lazy_mode = False
+        args.hpu_graphs = False
+        args.hpu_graphs_qa_mode = False
     if args.bf16:
-        args.tpu = True
+        if not args.hpu:
+            args.tpu = True
     if args.tpu and args.fp16:
         raise ValueError("Cannot combine --fp16 and --tpu, use --bf16 on TPUs")
 
